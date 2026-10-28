@@ -1,0 +1,10 @@
+.env
+.venv
+.tools
+.git
+data
+src/client/node_modules
+src/client/dist
+src/android/**/build
+**/__pycache__
+*.apk

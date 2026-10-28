@@ -1,0 +1,1 @@
+"""Family homework companion server."""

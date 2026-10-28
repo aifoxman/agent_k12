@@ -1,0 +1,17 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.paperbetween.parent'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.paperbetween.parent'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'APP_MODE', '"parent"'
+    }
+    buildFeatures { buildConfig true }
+    sourceSets.main.java.srcDirs += ['../common/src/main/java']
+    sourceSets.main.assets.srcDirs += ['../../../src/client/dist']
+}

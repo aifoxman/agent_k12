@@ -1,0 +1,26 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.paperbetween.child'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.paperbetween.child'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'APP_MODE', '"child"'
+    }
+    buildFeatures { buildConfig true }
+    sourceSets.main.java.srcDirs += ['../common/src/main/java']
+    sourceSets.main.assets.srcDirs += ['../../../src/client/dist']
+}
+
+dependencies {
+    // Align legacy jdk7/jdk8 artifacts with the stdlib already used by AndroidX.
+    implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
+    // Maven AAR contains native UVC libraries; no local NDK build is required.
+    implementation 'com.herohan:UVCAndroid:1.0.13'
+    // Bundled model: ready immediately and usable on Android devices without a model download.
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+}
