@@ -1110,6 +1110,40 @@ select:focus {
   font-size: 12px;
   color: #617267;
 }
+.camera-preview-expand {
+  position: absolute;
+  z-index: 20;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 9px 13px;
+  color: #fffaf0;
+  background: #18382cdb;
+  border: 1px solid #ffffff45;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.camera-preview-expand:focus-visible {
+  outline: 3px solid #f5cc88;
+  outline-offset: 3px;
+}
+.camera-preview-tap-hint {
+  position: absolute;
+  z-index: 10;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  left: 14px;
+  padding: 5px 10px;
+  color: #fffaf0;
+  background: #18382cbf;
+  border-radius: 30px;
+  font-size: 12px;
+  pointer-events: none;
+}
 .camera-rotation-control {
   display: flex;
   align-items: center;
@@ -5983,4 +6017,29 @@ select:focus {
   .child:has(.child-main.immersive-active.teaching-active) .voice-reply-status {
     bottom: 122px;
   }
+}
+
+/* Enlarge the existing live surface; keep its stream and paper coordinates. */
+.child-main[data-camera-stage='preview'] .camera-stage.camera-preview-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  width: 100dvw;
+  height: 100dvh;
+  max-height: none;
+  aspect-ratio: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #10261d;
+  container-type: size;
+  cursor: zoom-out;
+}
+.child-main[data-camera-stage='preview'] .camera-stage.camera-preview-fullscreen .camera-media {
+  width: min(100cqw, calc(100cqh * (var(--camera-aspect, 4 / 3))));
+  height: min(100cqh, calc(100cqw / (var(--camera-aspect, 4 / 3))));
+  max-width: none;
+}
+body.camera-preview-fullscreen-open :is(.speech-caption, .activity-banner) {
+  visibility: hidden;
 }

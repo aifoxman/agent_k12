@@ -14,8 +14,10 @@ import {
   Eye,
   Headphones,
   Link2,
+  Maximize2,
   Mic,
   MicOff,
+  Minimize2,
   Pause,
   Play,
   Plus,
@@ -3920,11 +3922,57 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   const expectedCameraDimensions = useRef(null);
   const [cameraKind, setCameraKind] = useState('');
   const [cameraPreviewImage, setCameraPreviewImage] = useState('');
+  const [cameraPreviewFullscreen, setCameraPreviewFullscreen] = useState(false);
+  const cameraPreviewSurface = useRef(null);
+  const cameraPreviewScroll = useRef({ x: 0, y: 0 });
+  const toggleCameraPreviewFullscreen = () => {
+    if (stage !== 'preview' || !stream || cameraStarting || cameraRotating) return;
+    if (!cameraPreviewFullscreen)
+      cameraPreviewScroll.current = { x: window.scrollX, y: window.scrollY };
+    setCameraPreviewFullscreen((shown) => !shown);
+  };
   const cameraSourceRef = useRef(null);
   const cameraOpenRef = useRef(null);
   const cameraStageRef = useRef(stage);
   const previewReturnStage = useRef('home');
   cameraStageRef.current = stage;
+  useEffect(() => {
+    if (stage !== 'preview' || !stream) setCameraPreviewFullscreen(false);
+  }, [stage, stream]);
+  useEffect(() => {
+    if (!cameraPreviewFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.body.classList.add('camera-preview-fullscreen-open');
+    try {
+      window.PaperDisplay?.setPreviewFullscreen?.(true);
+    } catch {
+      /* Browser previews can still fill the application viewport. */
+    }
+    const close = () => setCameraPreviewFullscreen(false);
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('appbackground', close);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('appbackground', close);
+      document.body.style.overflow = previousOverflow;
+      document.body.classList.remove('camera-preview-fullscreen-open');
+      try {
+        window.PaperDisplay?.setPreviewFullscreen?.(false);
+      } catch {
+        /* The native activity may already be closed. */
+      }
+      requestAnimationFrame(() => {
+        if (cameraPreviewSurface.current?.isConnected && cameraStageRef.current === 'preview')
+          window.scrollTo(cameraPreviewScroll.current.x, cameraPreviewScroll.current.y);
+      });
+    };
+  }, [cameraPreviewFullscreen]);
   useEffect(
     () => () => {
       cameraOpenRef.current?.abort();
@@ -7362,8 +7410,35 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
               />
             )}
           <div
-            className={`camera-stage ${!stream ? 'blank' : ''} ${stage === 'paused' && draftTarget ? 'has-preserved-draft' : ''}`}
+            ref={cameraPreviewSurface}
+            className={`camera-stage ${!stream ? 'blank' : ''} ${stage === 'paused' && draftTarget ? 'has-preserved-draft' : ''} ${cameraPreviewFullscreen && stage === 'preview' ? 'camera-preview-fullscreen' : ''}`}
+            data-preview-fullscreen={cameraPreviewFullscreen && stage === 'preview'}
+            onClick={(event) => {
+              if (event.target.closest('button, input, select, textarea, a')) return;
+              toggleCameraPreviewFullscreen();
+            }}
           >
+            {stage === 'preview' && stream && (
+              <>
+                <button
+                  type="button"
+                  className="camera-preview-expand"
+                  aria-label={cameraPreviewFullscreen ? '退出全屏预览' : '全屏预览相机'}
+                  aria-pressed={cameraPreviewFullscreen}
+                  disabled={cameraStarting || cameraRotating}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleCameraPreviewFullscreen();
+                  }}
+                >
+                  {cameraPreviewFullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+                  {cameraPreviewFullscreen ? '返回预览' : '全屏'}
+                </button>
+                <span className="camera-preview-tap-hint" aria-hidden="true">
+                  {cameraPreviewFullscreen ? '再点画面返回预览' : '点按画面全屏查看'}
+                </span>
+              </>
+            )}
             <div className="camera-media" style={{ '--camera-aspect': cameraAspect }}>
               <video ref={videoRef} data-camera-source={cameraKind} autoPlay playsInline muted />
               {stage === 'preview' && cameraPreviewImage && (

@@ -39,6 +39,8 @@ public final class MainActivity extends Activity {
     private SpeechRecognizer recognizer;
     private TextToSpeech tts;
     private volatile PcmPlayer pcmPlayer;
+    private boolean cameraPreviewFullscreen;
+    private int previewPreviousSystemUi;
     private AutoCloseable paperVision;
     private NativeCamera paperCamera;
     private boolean pendingVoice;
@@ -100,6 +102,7 @@ public final class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new NativeVoice(), "PaperVoice");
+        web.addJavascriptInterface(new NativeDisplay(), "PaperDisplay");
         tts = new TextToSpeech(this, status -> { if (status == TextToSpeech.SUCCESS && tts != null) tts.setLanguage(Locale.SIMPLIFIED_CHINESE); });
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String utteranceId) { callbackSpeechOutputStart(utteranceId); }
@@ -611,7 +614,34 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void setPreviewFullscreen(boolean fullscreen) {
+        if (cameraPreviewFullscreen == fullscreen) return;
+        android.view.View decor = getWindow().getDecorView();
+        if (fullscreen) {
+            previewPreviousSystemUi = decor.getSystemUiVisibility();
+            decor.setSystemUiVisibility(previewPreviousSystemUi
+                | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } else {
+            decor.setSystemUiVisibility(previewPreviousSystemUi);
+        }
+        cameraPreviewFullscreen = fullscreen;
+    }
+
+    private final class NativeDisplay {
+        @JavascriptInterface public void setPreviewFullscreen(boolean fullscreen) {
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) MainActivity.this.setPreviewFullscreen(fullscreen);
+            });
+        }
+    }
+
     @Override protected void onPause() {
+        setPreviewFullscreen(false);
         super.onPause();
         holdGestureActive = false;
         if (!pendingVoice) recognitionWanted = false;
