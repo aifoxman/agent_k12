@@ -30,9 +30,15 @@ final class UvcModeFallback {
 
     static List<Integer> candidates(List<Mode> published) {
         List<Integer> result = new ArrayList<>();
+        // Prefer the paper-friendly 4:3 sensor mode over a wider, potentially
+        // vertically cropped 16:9 mode. Keep native decode/encode bounds intact.
+        Comparator<Mode> preference = Comparator.comparingInt((Mode mode) -> mode.mjpeg ? 0 : 1)
+            .thenComparingLong(mode -> Math.abs((long) mode.width * 3 - (long) mode.height * 4)
+                * 1000000 / mode.height)
+            .thenComparingLong(mode -> (long) Math.abs(mode.width - 1920) * 10000
+                + Math.abs(mode.height - 1440));
         Mode primary = published.stream().filter(UvcModeFallback::usable)
-            .min(Comparator.comparingLong(mode -> (long) Math.abs(mode.width - 1920) * 10000
-                + Math.abs(mode.height - 1080) + (mode.mjpeg ? 0 : 100000000)))
+            .min(preference)
             .orElse(null);
         if (primary == null) return result;
         result.add(primary.index);
@@ -43,6 +49,14 @@ final class UvcModeFallback {
                     Math.abs((long) mode.height * primary.width - (long) mode.width * primary.height)))
                 .orElse(null);
             if (fallback != null && !result.contains(fallback.index)) result.add(fallback.index);
+            // When the primary already is the 1280 MJPEG mode, retain another
+            // published MJPEG option before switching to uncompressed USB video.
+            if (mjpeg && result.size() == 1) {
+                Mode alternative = published.stream().filter(UvcModeFallback::usable)
+                    .filter(mode -> mode.mjpeg && !result.contains(mode.index))
+                    .min(preference).orElse(null);
+                if (alternative != null) result.add(alternative.index);
+            }
         }
         return result;
     }

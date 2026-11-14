@@ -77,6 +77,8 @@ npm run dev --prefix src/client
 
 ## 构建与验证
 
+日常构建优先使用 GitHub Actions 的 `android-build.yml`，在 runner 上运行相机模式检查、客户端检查并生成两端 APK 与 SHA256 清单。仓库 Secret `ANDROID_DEBUG_KEYSTORE_BASE64` 保存开发签名密钥的 Base64，用于保持测试包签名一致、保留设备数据；不用于生产发布签名，不将密钥文件提交到 Git。
+
 ```powershell
 uv run pytest -q
 uv run ruff check src/k12_server tests
@@ -91,6 +93,8 @@ cd src/android
 Android 构建需 JDK 17、Android SDK Platform 36 和 Build Tools 35.0.0，设置 `ANDROID_HOME`。先构建前端，再构建 APK。输出在 `src/android/child/build/outputs/apk/debug/` 和 `src/android/parent/build/outputs/apk/debug/`。安装后首次填写同一个 HTTPS API 地址；家长注册后在平板获取 8 位码并完成配对。
 
 ## 外接 USB 相机
+
+纸面拍摄优先使用摄像头公布的 4:3 MJPEG 模式，再按有限次数回退到兼容模式；保持原始画面完整，不以拉伸、裁切或强制旋转模拟扩大视野。实际取景范围以镜头和真机画面为准。
 
 孩子端通过 `com.herohan:UVCAndroid:1.0.13` 接入 UVC，相机默认“自动 · 优先外接”；暂停后可选择“平板后置相机”。先点“预览相机”检查取景，再用“拍照预览”核对清晰度，两者仅在本机显示，不做纸面检查或上传。关闭预览后，点“开始作业／继续作业”才进入正常视觉检查与会话流程。
 

@@ -23,7 +23,21 @@ public final class UvcModeFallbackHarness {
             mode(0, 1920, 1080, 30, true), mode(1, 1280, 960, 30, true),
             mode(2, 1280, 720, 30, true), mode(3, 1280, 960, 5, false),
             mode(4, 1280, 720, 30, false));
-        equal(UvcModeFallback.candidates(original), Arrays.asList(0, 2, 4));
+        equal(UvcModeFallback.candidates(original), Arrays.asList(1, 0, 3));
+
+        // This camera advertises both full-frame 4:3 and widescreen modes.
+        List<UvcModeFallback.Mode> fullFrame = Arrays.asList(
+            mode(0, 1920, 1080, 30, true), mode(1, 1600, 1200, 30, true),
+            mode(2, 1280, 720, 30, true), mode(3, 1280, 720, 10, false));
+        equal(UvcModeFallback.candidates(fullFrame), Arrays.asList(1, 2, 3));
+        // A widescreen-only camera remains supported; never invent a 4:3 mode.
+        equal(UvcModeFallback.candidates(Arrays.asList(
+            mode(0, 1920, 1080, 30, true), mode(1, 1280, 720, 30, true),
+            mode(2, 1280, 720, 10, false))), Arrays.asList(0, 1, 2));
+        // Prefer a decodable compressed stream to uncompressed high-bandwidth video.
+        equal(UvcModeFallback.candidates(Arrays.asList(
+            mode(0, 1920, 1440, 5, false), mode(1, 1600, 1200, 30, true),
+            mode(2, 1280, 960, 5, false))), Arrays.asList(1, 2));
 
         List<UvcModeFallback.Mode> replacement = Arrays.asList(
             mode(0, 3264, 2448, 5, true), mode(1, 2048, 1536, 5, true),
