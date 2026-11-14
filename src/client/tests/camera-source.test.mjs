@@ -660,6 +660,21 @@ test('live UVC rotation repaints the current frame immediately without replacing
   assert.equal(fixture.calls.draw.length, 5);
 });
 
+test('native 8MP paper frames rotate into full-resolution portrait without scaling', async () => {
+  const fixture = cameraEnvironment({ width: 3264, height: 2448 });
+  const source = await openCameraSource({ rotation: 270, environment: fixture.environment });
+  assert.deepEqual(source.stream.getVideoTracks()[0].getSettings(), {
+    width: 2448,
+    height: 3264,
+  });
+  assert.deepEqual(fixture.calls.transforms[0], [0, -1, 1, 0, 0, 3264]);
+  assert.deepEqual(fixture.calls.draw[0].slice(1), [0, 0, 3264, 2448]);
+  assert.deepEqual(source.setRotation(0), { rotation: 0, width: 3264, height: 2448 });
+  source.stop();
+  assert.equal(fixture.calls.decode[0].bitmap.closed, 1);
+  assert.equal(fixture.calls.close, 1);
+});
+
 test('a JPEG decoded after a live angle change uses the newest orientation and releases the prior bitmap', async () => {
   const fixture = cameraEnvironment({ width: 3, height: 2, framePixels: landscapePixels });
   const source = await openCameraSource({ rotation: 90, environment: fixture.environment });

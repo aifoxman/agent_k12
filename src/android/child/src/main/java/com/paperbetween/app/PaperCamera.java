@@ -48,6 +48,7 @@ import org.json.JSONObject;
 public final class PaperCamera implements NativeCamera {
     private static final long MAX_FRAME_AGE_MS = 2500;
     private static final long JPEG_INTERVAL_MS = 100;
+    private static final long HIGH_RES_JPEG_INTERVAL_MS = 200;
     private final Activity activity;
     private final WebView web;
     private final UsbManager usb;
@@ -405,13 +406,15 @@ public final class PaperCamera implements NativeCamera {
     private void receiveFrame(Session current, int attempt, Size size, ByteBuffer buffer) {
         long token = current.generation;
         long capturedAt = SystemClock.elapsedRealtime();
+        if (size == null || !UvcModeFallback.frameSizeUsable(size.width, size.height)) return;
+        long interval = (long) size.width * size.height > 1920L * 1440
+            ? HIGH_RES_JPEG_INTERVAL_MS : JPEG_INTERVAL_MS;
         synchronized (lock) {
-            if (!currentAttempt(current, attempt) || capturedAt - lastEncodeMs < JPEG_INTERVAL_MS) return;
+            if (!currentAttempt(current, attempt) || capturedAt - lastEncodeMs < interval) return;
         }
         if (!encoding.compareAndSet(false, true)) return;
         boolean submitted = false;
         try {
-            if (size == null || size.width < 1280 || size.width > 1920 || size.height <= 0 || size.height > 1440) return;
             int bytes = size.width * size.height * 3 / 2;
             ByteBuffer copy = buffer.duplicate();
             copy.rewind();
@@ -423,7 +426,7 @@ public final class PaperCamera implements NativeCamera {
                 try {
                     ByteArrayOutputStream output = new ByteArrayOutputStream();
                     boolean valid = new YuvImage(nv21, ImageFormat.NV21, size.width, size.height, null)
-                        .compressToJpeg(new Rect(0, 0, size.width, size.height), 85, output);
+                        .compressToJpeg(new Rect(0, 0, size.width, size.height), 95, output);
                     if (!valid) return;
                     boolean first;
                     synchronized (lock) {

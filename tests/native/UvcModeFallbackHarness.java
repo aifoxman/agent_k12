@@ -44,7 +44,18 @@ public final class UvcModeFallbackHarness {
             mode(2, 1600, 1200, 5, true), mode(3, 1280, 960, 5, true),
             mode(4, 800, 600, 5, true), mode(5, 1600, 1200, 5, false),
             mode(6, 1280, 960, 5, false));
-        equal(UvcModeFallback.candidates(replacement), Arrays.asList(2, 3, 6));
+        equal(UvcModeFallback.candidates(replacement), Arrays.asList(0, 1, 3));
+        List<UvcModeFallback.Mode> highDefinition = Arrays.asList(
+            mode(0, 3264, 2448, 15, true), mode(1, 3264, 1836, 15, true),
+            mode(2, 2592, 1944, 20, true), mode(3, 2048, 1536, 20, true),
+            mode(4, 1920, 1080, 30, true), mode(5, 1600, 1200, 30, true),
+            mode(6, 3264, 2448, 2, false));
+        equal(UvcModeFallback.candidates(highDefinition), Arrays.asList(0, 2, 5));
+        check(UvcModeFallback.frameSizeUsable(3264, 2448), "native 8MP frame must reach encoder");
+        check(!UvcModeFallback.frameSizeUsable(3265, 2448)
+            && !UvcModeFallback.frameSizeUsable(3264, 2449)
+            && !UvcModeFallback.frameSizeUsable(Integer.MAX_VALUE, Integer.MAX_VALUE)
+            && !UvcModeFallback.frameSizeUsable(-3264, 2448), "invalid frames must not allocate buffers");
         check(replacement.get(6).fps == 5, "YUYV must keep the advertised 5fps");
         equal(UvcModeFallback.candidates(Collections.singletonList(mode(7, 1280, 960, 5, true))),
             Collections.singletonList(7));

@@ -4668,7 +4668,13 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     }, 2000);
     return () => clearInterval(interval);
   }, [stream, stage, hintTarget?.imageUrl]);
-  const capture = async (crop = false, useSelection = true, region = null, maxWidth = 1200) => {
+  const capture = async (
+    crop = false,
+    useSelection = true,
+    region = null,
+    maxWidth = 1200,
+    { quality = 0.8, maxBytes = 1_900_000 } = {},
+  ) => {
     const viewRevision = cameraViewRevision.current;
     const source = cameraSourceRef.current;
     const video = videoRef.current;
@@ -4705,9 +4711,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     );
     const encode = (quality) =>
       new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
-    let blob = await encode(0.8);
-    if (blob?.size > 1_900_000) blob = await encode(0.62);
-    if (!blob || blob.size > 1_900_000) throw new Error('截图过大，请调整纸面后重试');
+    let blob = await encode(quality);
+    if (blob?.size > maxBytes) blob = await encode(0.62);
+    if (!blob || blob.size > maxBytes) throw new Error('截图过大，请调整纸面后重试');
     if (cameraSourceRef.current !== source || cameraViewRevision.current !== viewRevision)
       throw new Error('相机画面已调整，请重新拍摄');
     source.assertFresh();
@@ -4783,7 +4789,10 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   };
   const previewCameraPhoto = async () => {
     try {
-      const blob = await capture(false, false, null, 2560);
+      const blob = await capture(false, false, null, Infinity, {
+        quality: 0.95,
+        maxBytes: 12_000_000,
+      });
       setCameraPreviewImage(URL.createObjectURL(blob));
     } catch (error) {
       onError(error);
@@ -7608,6 +7617,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 <div>
                   <span className="camera-rotation-direction" role="status">
                     {stream ? '完整取景 · ' : 'USB 画面 · '}
+                    {stream && cameraAspect ? `${cameraAspect.replace(/\s*\/\s*/, ' × ')} · ` : ''}
                     {cameraAngle === 0 ? '原方向' : `已旋转 ${cameraAngle}°`}
                   </span>
                   <small>单页竖拍时，让文字朝上、整页入镜。</small>
