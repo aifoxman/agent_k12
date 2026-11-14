@@ -12,6 +12,15 @@ android {
         buildConfigField 'String', 'APP_MODE', '"child"'
     }
     buildFeatures { buildConfig true }
+    def developmentKey = System.getenv('ANDROID_DEBUG_KEYSTORE_PATH')
+    if (developmentKey) {
+        signingConfigs.debug {
+            storeFile file(developmentKey)
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     sourceSets.main.java.srcDirs += ['../common/src/main/java']
     sourceSets.main.assets.srcDirs += ['../../../src/client/dist']
 }
