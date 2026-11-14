@@ -7607,7 +7607,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 </button>
                 <div>
                   <span className="camera-rotation-direction" role="status">
-                    {stream ? `${cameraPortrait ? '竖向单页' : '横向画面'} · ` : 'USB 画面 · '}
+                    {stream ? '完整取景 · ' : 'USB 画面 · '}
                     {cameraAngle === 0 ? '原方向' : `已旋转 ${cameraAngle}°`}
                   </span>
                   <small>单页竖拍时，让文字朝上、整页入镜。</small>

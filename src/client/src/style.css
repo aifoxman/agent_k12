@@ -1158,6 +1158,29 @@ select:focus {
   z-index: 2;
   background: #25382f;
 }
+
+/* A tall paper-view surface does not rotate or crop the camera pixels.
+   Keep the media box at its source ratio so paper coordinates stay accurate. */
+@media (min-width: 600px) and (orientation: portrait) {
+  .child-main:is(
+      [data-camera-stage='preview'],
+      [data-camera-stage='setup']
+    )[data-camera-orientation]
+    .camera-stage {
+    aspect-ratio: 3 / 4;
+    max-height: min(66dvh, calc(100dvh - 260px));
+    container-type: size;
+  }
+  .child-main:is(
+      [data-camera-stage='preview'],
+      [data-camera-stage='setup']
+    )[data-camera-orientation]
+    .camera-media {
+    width: min(100cqw, calc(100cqh * (var(--camera-aspect, 4 / 3))));
+    height: min(100cqh, calc(100cqw / (var(--camera-aspect, 4 / 3))));
+    max-width: none;
+  }
+}
 .camera-test-snapshot img {
   width: 100%;
   height: 100%;
