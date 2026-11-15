@@ -4337,6 +4337,28 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       offer.id || '',
     );
   };
+  useEffect(() => {
+    if (
+      stage !== 'active' ||
+      !proactive ||
+      batchOpen ||
+      batchSubmitting ||
+      voiceCall ||
+      correctionOpen ||
+      questionInputOpen ||
+      (pendingHelpOffer.current && pendingHelpOffer.current.sessionId !== sessionId)
+    )
+      clearHelpOffer(true);
+  }, [
+    stage,
+    sessionId,
+    proactive,
+    batchOpen,
+    batchSubmitting,
+    voiceCall,
+    correctionOpen,
+    questionInputOpen,
+  ]);
   const timer = useSessionTimer({
     sessionId,
     active: stage === 'active' && Boolean(stream),
@@ -5486,7 +5508,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     hintBusy,
     voiceCall,
     correctionOpen,
-    autoReply.status,
+    Boolean(autoReply.status),
     teachingDraftVisible,
   ]);
   const canPresentTeachingPaper = (imageUrl) => {
