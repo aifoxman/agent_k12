@@ -97,7 +97,7 @@ export function parseVoiceReply(context, spoken) {
   )
     return { type: 'try_independently' };
   if (
-    /^(不用|不要|不需要|算了|取消|先不|稍后|不用了|不需要提示|不要提示|我自己来|我先自己做|不允许批改|不同意批改)$/.test(
+    /^(不用|不要|不需要|算了|取消|先不|稍后|不用了|不需要提示|不要提示|我自己来|我先自己做|让我自己做|我想自己做|我自己做|不允许批改|不同意批改)$/.test(
       text,
     )
   )

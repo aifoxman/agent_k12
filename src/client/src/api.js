@@ -218,7 +218,7 @@ export function prepareSpeech(text, signal, options = {}) {
   const rate = speechRate(options.rate, 1);
   const response = premiumAudioResponse(text, controller.signal, rate);
   response.catch(() => {});
-  return { response, rate, cancel: () => controller.abort() };
+  return { response, rate, text, cancel: () => controller.abort() };
 }
 
 function startSystemSpeech(text, id, waitForEnd, finish, onStart, options = {}) {
@@ -295,7 +295,7 @@ async function premiumAudioResponse(text, signal, rate = 1) {
 }
 
 async function playPremiumSpeech(text, id, playback, prepared) {
-  if (prepared && prepared.rate !== playback.rate) {
+  if (prepared && (prepared.rate !== playback.rate || prepared.text !== text)) {
     prepared.cancel();
     prepared = null;
   }

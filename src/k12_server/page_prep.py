@@ -22,6 +22,7 @@ from .ai import bounded_confidence, normalized_box, parse_model_json, post_model
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
+from .reading_review import normalize_reading
 
 logger = logging.getLogger(__name__)
 ALLOWED_MODELS = ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna")
@@ -111,7 +112,14 @@ def inventory_page(settings: Settings, image: bytes,
         "progress 只能是 done、partial、blank、occluded；空白不等于孩子卡题。"
         "返回 JSON：{\"questions\":[{\"path\":[\"二\",\"3\",\"（1）\"],\"label\":\"二、3、（1）\","
         "\"evidence\":\"完整可见题干及条件\",\"box\":[x,y,w,h],\"progress\":\"blank\","
-        "\"confidence\":0.9}]}。box 是相对整图的归一化坐标，最多 60 道，不返回不可读题。"
+        "\"confidence\":0.9,\"reading\":{\"conditions\":[\"题干中的已知条件原文\"],"
+        "\"ask\":\"所求问题原文\",\"anchors\":[{\"id\":\"r1\",\"text\":\"条件或关键词原文\","
+        "\"box\":[x,y,w,h],\"confidence\":0.95}]}}]}。"
+        "reading 是提前缓存给孩子的读题审题，必须在解题前生成；只摘录本题真实已知条件及所求，"
+        "不能包含答案、孩子笔迹、推导、运算结果或猜测。"
+        "每题最多4个简短条件、一个所求、4个短词锚点；锚点紧贴原文，不框整题，坐标相对整图。"
+        "无法可靠摘录时reading=null，不为填字段编造。"
+        "box 是相对整图的归一化坐标，最多 60 道，不返回不可读题。"
     )
     prior_text = ""
     if previous:
@@ -151,6 +159,7 @@ def inventory_page(settings: Settings, image: bytes,
             else "occluded",
             "confidence": confidence,
         })
+        found[-1]["reading"] = normalize_reading(item.get("reading"), found[-1], image)
     return found
 
 
@@ -459,9 +468,10 @@ class PagePreparation:
                 if not changed_print:
                     for row, item in zip(rows, items, strict=True):
                         db.execute("UPDATE prepared_questions SET progress=?,read_confidence=?,"
-                                   "box_json=?,label=? WHERE id=?",
+                                   "box_json=?,label=?,reading_json=? WHERE id=?",
                                    (item["progress"], item["confidence"],
-                                    json.dumps(item["box"]), item["label"], row["id"]))
+                                    json.dumps(item["box"]), item["label"],
+                                    json.dumps(item.get("reading"), ensure_ascii=False), row["id"]))
                     db.execute("UPDATE page_preparations SET fingerprint=? WHERE id=? "
                                "AND status='ready'", (image_fingerprint(image), page_id))
             if changed_print:
@@ -525,14 +535,15 @@ class PagePreparation:
                     db.execute(
                         "INSERT INTO prepared_questions(id,page_id,ordinal,path_json,label,evidence,"
                         "box_json,progress,read_confidence,solution_json,solve_confidence,"
-                        "verification_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "verification_status,reading_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (uuid.uuid4().hex, page_id, ordinal, json.dumps(item["path"], ensure_ascii=False),
                          item["label"], item["evidence"], json.dumps(item["box"]),
                          item["progress"], item["confidence"],
                          previous["solution_json"] if usable else None,
                          previous["solve_confidence"] if usable else None,
                          previous["verification_status"] if usable else
-                         "uncertain" if item["progress"] == "occluded" else "pending"),
+                         "uncertain" if item["progress"] == "occluded" else "pending",
+                         json.dumps(item.get("reading"), ensure_ascii=False)),
                     )
             logger.info("page_inventory_ready session=%s total=%d reused=%d elapsed_ms=%d",
                         session_id, len(questions), reused,

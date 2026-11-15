@@ -21,8 +21,10 @@ export function createTeachingPlayback({
   pauseMs = 250,
   stepPauseMs = 400,
   rate = 1,
+  prepare,
 }) {
   const items = [];
+  const prepared = new Map();
   let cursor = 0;
   let finished = false;
   let cancelled = false;
@@ -41,6 +43,17 @@ export function createTeachingPlayback({
   let manualHold = false;
   let pauseRequested = false;
   let skipReading = false;
+  const clearPrepared = () => {
+    for (const item of prepared.values()) item?.cancel?.();
+    prepared.clear();
+  };
+  const warm = () => {
+    if (cancelled || !prepare) return;
+    // At most two future utterances; never synthesize an entire lesson that
+    // the child may interrupt or decline.
+    for (let index = cursor; index < Math.min(items.length, cursor + 2); index++)
+      if (!prepared.has(index)) prepared.set(index, prepare(items[index], { rate }));
+  };
   const totalGroups = () => logicalTeachingSteps(items).length;
   const publish = (next = phase) => {
     phase = next;
@@ -70,12 +83,20 @@ export function createTeachingPlayback({
     currentAbort = new AbortController();
     interrupted = false;
     publish('playing');
-    played = await play(item.step, {
-      index: item.index,
-      rate,
-      repeat,
-      signal: currentAbort.signal,
-    });
+    const audio = repeat ? undefined : prepared.get(item.index);
+    prepared.delete(item.index);
+    warm();
+    try {
+      played = await play(item.step, {
+        index: item.index,
+        rate,
+        repeat,
+        signal: currentAbort.signal,
+        prepared: audio,
+      });
+    } finally {
+      audio?.cancel?.();
+    }
     if (currentAbort.signal.aborted && !repeatRequested) played = false;
     if (!cancelled && !currentAbort.signal.aborted) {
       publish('reading');
@@ -188,18 +209,20 @@ export function createTeachingPlayback({
     }
     if (!cancelled) {
       complete = true;
+      clearPrepared();
       publish('complete');
     }
     return !cancelled;
   };
   const done = Promise.resolve().then(drain);
   // A rejected speech call belongs to the requesting component's error handler.
-  done.catch(() => {});
+  done.catch(clearPrepared);
   return {
     done,
     enqueue(steps) {
       if (cancelled || finished) return;
       items.push(...steps);
+      warm();
       wake?.();
       publish();
     },
@@ -218,7 +241,11 @@ export function createTeachingPlayback({
     },
     command(command) {
       if (cancelled) return;
-      if (command === 'slower') rate = 0.85;
+      if (command === 'slower') {
+        rate = 0.85;
+        clearPrepared();
+        warm();
+      }
       if (command === 'pause') {
         pauseRequested = true;
         currentAbort?.abort();
@@ -267,6 +294,7 @@ export function createTeachingPlayback({
     },
     cancel() {
       cancelled = true;
+      clearPrepared();
       currentAbort?.abort();
       action?.('cancel');
       wake?.();

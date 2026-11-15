@@ -64,7 +64,7 @@ export function splitTeachingSpeech(speech, maxChars = DEFAULT_MAX_CHARS) {
 
 export function splitTeachingBeat(
   beat,
-  { sourceBeatIndex = 0, maxChars = DEFAULT_MAX_CHARS } = {},
+  { sourceBeatIndex = 0, maxChars = DEFAULT_MAX_CHARS, sentenceChunks = false } = {},
 ) {
   const sentences = String(beat.speech || '').match(/[^。！？!?]*[。！？!?]+|[^。！？!?]+$/gu) || [
     '',
@@ -75,7 +75,7 @@ export function splitTeachingBeat(
   let hasCue = false;
   for (const sentence of sentences) {
     const nextCue = cues.some((text) => matchingOffset(sentence, text) >= 0);
-    if (passage && hasCue && nextCue) {
+    if (passage && (sentenceChunks || (hasCue && nextCue))) {
       passages.push(passage);
       passage = '';
       hasCue = false;

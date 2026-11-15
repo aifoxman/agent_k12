@@ -9,7 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install and verify API
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pytest -q
   android:
+    needs: server
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

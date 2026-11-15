@@ -85,6 +85,7 @@ import {
   settleStallProbe,
 } from './stall-watch';
 import { completedVoiceReply, createReplyPause } from './voice-turn';
+import { createHelpOfferDeadline, helpOfferCanStart } from './help-offer';
 import { TaskReviewCard } from './task-review';
 import { sameSubject } from './subject-matching';
 import { WorkedSolution } from './worked-solution';
@@ -985,6 +986,7 @@ function useTimedVoiceReply(
   enabled = true,
   remoteTranscription = false,
   fallbackTip = '',
+  onTimeout,
 ) {
   const [status, setStatus] = useState(null);
   const sequenceRef = useRef(0);
@@ -1002,10 +1004,21 @@ function useTimedVoiceReply(
   const lastPromptEndRef = useRef(0);
   const enabledRef = useRef(enabled);
   const onReplyRef = useRef(onReply);
+  const onTimeoutRef = useRef(onTimeout);
+  const silenceRef = useRef(null);
+  onTimeoutRef.current = onTimeout;
+  if (!silenceRef.current)
+    silenceRef.current = createHelpOfferDeadline({
+      onTimeout: (context) => {
+        cancel();
+        onTimeoutRef.current?.(context);
+      },
+    });
   enabledRef.current = enabled;
   onReplyRef.current = onReply;
 
   const cancel = ({ keepChoices = false, keepManual = false } = {}) => {
+    silenceRef.current.cancel();
     sequenceRef.current++;
     pendingRef.current = null;
     activePromptRef.current?.onSpeechEnd?.();
@@ -1037,6 +1050,8 @@ function useTimedVoiceReply(
     };
     const manualEnd = () => {
       manualRef.current = false;
+      if (manualReplyRef.current && enabledRef.current)
+        silenceRef.current.arm(manualReplyRef.current.context);
     };
     const background = () => {
       const prompt = activePromptRef.current || pendingRef.current;
@@ -1103,6 +1118,7 @@ function useTimedVoiceReply(
       window.removeEventListener('paper-speech-choice', choose);
       window.removeEventListener('paper-speech-interact', interact);
       sequenceRef.current++;
+      silenceRef.current.cancel();
       sessionRef.current?.cancel();
       clearInterval(clockRef.current);
       clearTimeout(deadlineRef.current);
@@ -1151,6 +1167,7 @@ function useTimedVoiceReply(
         hideRef.current = setTimeout(() => setStatus(null), 5000);
         if (!alreadySpoken) await speakAndWait(spoken, choices, caption);
         onSpeechEnd?.();
+        if (sequence === sequenceRef.current && enabledRef.current) silenceRef.current.arm(context);
         return;
       }
       // This system recognizer still transcribes the Pad's own speaker after
@@ -1171,6 +1188,7 @@ function useTimedVoiceReply(
       return;
     }
     const replySeconds = context === 'help_offer' ? 20 : 15;
+    silenceRef.current.arm(context);
     const pauseMs = ['hint_followup', 'hint_attempt_reply', 'hint_target'].includes(context)
       ? 5000
       : 4000;
@@ -1249,6 +1267,7 @@ function useTimedVoiceReply(
       onError: () => {},
       onPartial: (text) => {
         if (sequence !== sequenceRef.current || !replyPause.noteTranscript(text)) return;
+        silenceRef.current.arm(context);
         extendDeadline();
         schedulePause();
         beginListening();
@@ -1265,8 +1284,10 @@ function useTimedVoiceReply(
           schedulePause();
           beginListening();
         }
-        if (phase === 'processing' && sequence === sequenceRef.current)
+        if (phase === 'processing' && sequence === sequenceRef.current) {
+          silenceRef.current.hold();
           setStatus({ phase: 'processing', label: '正在理解回应', choices });
+        }
       },
       onFinish: ({ text, partial, error, reason }) => {
         if (sequence !== sequenceRef.current) return;
@@ -1289,6 +1310,7 @@ function useTimedVoiceReply(
             reason === 'tts_overlap' || Date.now() - lastPromptEndRef.current < 2500,
           )
         ) {
+          silenceRef.current.resume(context);
           setStatus({
             phase: 'manual',
             label: choices.length
@@ -1312,11 +1334,12 @@ function useTimedVoiceReply(
         });
         hideRef.current = setTimeout(() => setStatus(null), interrupted ? 30000 : 5000);
         if (replyText && !interrupted) {
+          silenceRef.current.cancel();
           stopSpeechOutput();
           tappablePromptRef.current = null;
           window.dispatchEvent(new Event('paper-speech-choice-used'));
           onReplyRef.current(context, replyText);
-        }
+        } else silenceRef.current.resume(context);
       },
     });
     if (sequence !== sequenceRef.current) return;
@@ -1340,6 +1363,7 @@ function useTimedVoiceReply(
     )
       return false;
     if (!reply) return false;
+    silenceRef.current.cancel();
     onReplyRef.current(prompt.context, text);
     return true;
   };
@@ -4193,6 +4217,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     !voiceCall && !questionInputOpen,
     remoteTranscription,
     dashboard.asr_available && !remoteTranscription ? '请家长在手机端开启短语音转写。' : '',
+    (context) => {
+      if (context === 'help_offer') beginHelpOffer();
+    },
   );
   useEffect(() => {
     const pending = pendingTaskReminders(
@@ -4281,6 +4308,34 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     clearTimeout(helpOfferExpiryRef.current);
     if (cancelPrompt) autoReply.cancel();
     setHintTarget((current) => (current?.kind === 'offer' ? null : current));
+  };
+  const beginHelpOffer = () => {
+    const offer = pendingHelpOffer.current;
+    if (
+      !helpOfferCanStart(offer, {
+        sessionId,
+        frameRevision: cameraViewRevision.current,
+        stage,
+        proactive,
+        busy:
+          hintBusy ||
+          attemptBusy ||
+          batchOpen ||
+          batchSubmitting ||
+          voiceCall ||
+          correctionOpen ||
+          questionInputOpen,
+        hidden: document.visibilityState === 'hidden',
+      })
+    ) {
+      clearHelpOffer(true);
+      return;
+    }
+    requestHintRef.current?.(
+      offer.id ? `请针对${offer.label}读题并说明实质解题思路` : READING_QUESTION,
+      '',
+      offer.id || '',
+    );
   };
   const timer = useSessionTimer({
     sessionId,
@@ -5215,7 +5270,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         hintBusy ||
         voiceCall ||
         correctionOpen ||
-        autoReply.status ||
+        (autoReply.status && !pendingHelpOffer.current) ||
         busyAnalysis.current
       )
         return;
@@ -5315,6 +5370,10 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             id: checkin.candidate_id || '',
             label: checkin.target_label || '',
             box: checkin.target_box || null,
+            sessionId,
+            frameRevision: cameraViewRevision.current,
+            image: current,
+            reading: checkin.reading_review || null,
           };
           if (checkin.target_box) {
             setHintTarget((visible) =>
@@ -5379,6 +5438,10 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           label: candidate.label,
           box: candidate.box,
           questionKey,
+          sessionId,
+          frameRevision: cameraViewRevision.current,
+          image: currentFrame,
+          reading: candidate.reading_review || null,
         };
         setHintTarget((visible) =>
           visible?.kind === 'teaching'
@@ -5443,10 +5506,11 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     let utteranceGeneration = 0;
     return createTeachingPlayback({
       rate,
+      prepare: (step, options) => prepareSpeech(step.speech, undefined, options),
       onState: (state) => {
         if (isCurrent()) setTeachingPlayback(state);
       },
-      play: async (step, { index, repeat, rate, signal }) => {
+      play: async (step, { index, repeat, rate, signal, prepared: queuedSpeech }) => {
         if (!isCurrent() || signal.aborted) return false;
         const presentation = presentStep(step, index);
         const presented = presentation.step || step;
@@ -5466,7 +5530,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           resolveInk();
         };
         signal.addEventListener('abort', abort, { once: true });
-        const prepared = prepareSpeech(presented.speech, signal, { rate });
+        const prepared = queuedSpeech || prepareSpeech(presented.speech, signal, { rate });
         try {
           const spoken = speakAndWait(presented.speech, [], presented.speech, prepared, startInk, {
             rate,
@@ -5558,6 +5622,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     spokenReference = false,
     advance = false,
   ) => {
+    const acceptedOffer =
+      candidateId && pendingHelpOffer.current?.id === candidateId ? pendingHelpOffer.current : null;
     const completeCandidate = Boolean(
       candidateId && asksForCompleteTeaching(typeof asked === 'string' ? asked : question),
     );
@@ -5610,6 +5676,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     markHintRequestRef.current = markController;
     let streamedSentences = 0;
     const streamedBeats = [];
+    const readingKeys = new Set();
     const pendingVisual = [];
     const playbackRun = ++teachingRunRef.current;
     const frameRevision = cameraViewRevision.current;
@@ -5672,14 +5739,17 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       if (candidateId) form.append('candidate_id', candidateId);
       if (manualSelection) form.append('selected_strokes', JSON.stringify(inkStrokes));
       if (selectedTask) form.append('task_id', selectedTask);
-      const hintFrame = frozen?.image || (await capture(false, true, null, 1800));
+      const hintFrame =
+        frozen?.image || acceptedOffer?.image || (await capture(false, true, null, 1800));
       if (!isCurrent() || (manualSelection && scheduler.revision() !== selectionRevision)) return;
       const localAnchors = frozen
         ? frozen.localAnchors
-        : await recognizeHintAnchors(hintFrame, {
-            signal: markController.signal,
-            isCurrent,
-          });
+        : acceptedOffer?.reading || dashboard.page_preparation?.inventory_ready
+          ? null
+          : await recognizeHintAnchors(hintFrame, {
+              signal: markController.signal,
+              isCurrent,
+            });
       if (!isCurrent() || (manualSelection && scheduler.revision() !== selectionRevision)) return;
       form.append('image', hintFrame, 'question.jpg');
       if (localAnchors) form.append('local_text_anchors', JSON.stringify(localAnchors));
@@ -5726,6 +5796,24 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         (step, index) => presentTeachingPrefix([...visibleSteps.slice(0, index), step], imageUrl()),
       );
       teachingPlaybackRef.current = playback;
+      const enqueueBeat = (data) => {
+        if (data.reading_key && readingKeys.has(data.reading_key)) return;
+        if (data.reading_key) readingKeys.add(data.reading_key);
+        setHintPreparationLabel('');
+        streamedBeats.push(data);
+        streamedSentences++;
+        playback.enqueue(
+          splitTeachingBeat(data, {
+            sourceBeatIndex: streamedBeats.length - 1,
+            sentenceChunks: true,
+            maxChars: 72,
+          }),
+        );
+      };
+      if (candidateId && acceptedOffer?.reading?.beat) {
+        updateTarget({ box: acceptedOffer.reading.box, label: acceptedOffer.reading.label });
+        enqueueBeat(acceptedOffer.reading.beat);
+      }
       const result = await streamApi(
         '/v1/hints/stream',
         form,
@@ -5747,12 +5835,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             return;
           }
           if (event === 'beat' && data.speech) {
-            setHintPreparationLabel('');
-            streamedBeats.push(data);
-            streamedSentences++;
-            playback.enqueue(
-              splitTeachingBeat(data, { sourceBeatIndex: streamedBeats.length - 1 }),
-            );
+            enqueueBeat(data);
             return;
           }
           if (event !== 'sentence' || !data.text) return;
@@ -5765,7 +5848,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 page: pendingVisual.flatMap((visual) => visual.page || []),
                 scratch: pendingVisual.flatMap((visual) => visual.scratch || []),
               },
-              { sourceBeatIndex: streamedSentences - 1 },
+              { sourceBeatIndex: streamedSentences - 1, sentenceChunks: true, maxChars: 72 },
             ),
           );
           pendingVisual.length = 0;
@@ -6991,7 +7074,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     else if (intent.type === 'ask_target' && stage === 'active') {
       if (context === 'help_offer' && pendingHelpOffer.current) {
         const offer = pendingHelpOffer.current;
-        if (offer.id) requestHint(`请针对${offer.label}读题并说明实质解题思路`, '', offer.id);
+        if (offer.id) beginHelpOffer();
         else {
           clearHelpOffer(false);
           autoReply.ask('hint_target', '你在看哪一题？直接说题号，我会帮你读题和理清思路。');

@@ -15,6 +15,29 @@ globalThis.CustomEvent = class {
 
 const { configureSpeech, prepareSpeech, speakAndWait } = await import('../src/api.js');
 
+test('prefetched speech with changed visible wording is cancelled and cannot describe absent ink', async () => {
+  const inputs = [];
+  globalThis.window = {
+    dispatchEvent: () => {},
+    PaperVoice: {
+      stopPcm: () => {},
+      stop: () => {},
+      startPcm: () => true,
+      pushPcm: () => true,
+      finishPcm: (id) => queueMicrotask(() => window.__pcmOutputDone(id, true)),
+    },
+  };
+  globalThis.fetch = async (_url, options) => {
+    inputs.push(JSON.parse(options.body).input);
+    return new Response(new Uint8Array([1, 0, 2, 0]));
+  };
+  configureSpeech({ enabled: true });
+  const prepared = prepareSpeech('Look at the circle.');
+  assert.equal(await speakAndWait('Look at this condition.', [], undefined, prepared), true);
+  assert.deepEqual(inputs, ['Look at the circle.', 'Look at this condition.']);
+  configureSpeech();
+});
+
 test('a slower lesson cancels prepared normal-speed audio and sends the chosen speed to cloud speech', async () => {
   const speeds = [];
   globalThis.window = {

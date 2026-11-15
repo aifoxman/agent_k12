@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import asyncio
+import inspect
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +17,71 @@ from test_api import make_client, pair, parent
 
 from k12_server import page_prep
 from k12_server.page_prep import PagePreparation, image_fingerprint
+
+
+def test_cached_reading_is_emitted_before_a_slow_solution_and_saved_once(prepared, monkeypatch):
+    from fastapi import UploadFile
+
+    _, module, child, session, _, image, _ = prepared
+    reading = {"conditions": ["本题两个部分"], "ask": "说明关系", "anchors": []}
+    with module.transaction(module.settings.database_path) as db:
+        db.execute("UPDATE prepared_questions SET reading_json=?", (json.dumps(reading),))
+    received_reading = []
+    def resolve(_session, _family, _image, target, *_args, **_kwargs):
+        assert received_reading, "The solver blocked delivery of the already prepared reading"
+        return {**target, "solution": SOLUTION, "verification_status": "verified"}
+    monkeypatch.setattr(module, "_resolve_teaching_solution", resolve)
+    monkeypatch.setattr(module, "_refresh_teaching_solution", lambda _s, _f, _i, target, *_a, **_k: target)
+    monkeypatch.setattr(module, "stream_teaching_beats", lambda *_a: iter([
+        ("beat", {"speech": "接着比较这两个部分的关系。", "step_id": 1, "step_end": True,
+                  "page": [], "scratch": [], "reply_mode": "none", "teaching_move": "give_clue"})]))
+    kwargs = {name: param.default.default for name, param in inspect.signature(module.stream_hint).parameters.items()
+              if hasattr(param.default, "default")}
+    claims = module.read_token(module.settings.app_secret, child["Authorization"].removeprefix("Bearer "))
+    kwargs.update(session_id=session, question="读题并说明解题思路", level=1,
+                  image=UploadFile(file=io.BytesIO(image), filename="paper.jpg",
+                                   headers=module.Headers({"content-type": "image/jpeg"})), claims=claims)
+    response = module.stream_hint(**kwargs)
+    async def receive():
+        result = []
+        async for frame in response.body_iterator:
+            kind = frame.split("\n", 1)[0].removeprefix("event: ")
+            data = json.loads(frame.split("data: ", 1)[1])
+            result.append((kind, data))
+            if kind == "beat" and data.get("phase") == "reading":
+                received_reading.append(data)
+        return result
+    result = asyncio.run(receive())
+    beats = [data for kind, data in result if kind == "beat"]
+    assert len(beats) == 2 and [beat["step_id"] for beat in beats] == [1, 2]
+    assert result[-1][0] == "done"
+    assert result[-1][1]["visual_beats"] == beats
+    assert result[-1][1]["response"].count("先看第1题") == 1
+
+
+def test_inventory_caches_reading_while_the_first_solution_is_still_running(prepared, monkeypatch):
+    _, module, _, session, family, image, service = prepared
+    entered, release = Event(), Event()
+    inventory = [{"path": ["1"], "label": "第1题", "box": [.1, .1, .8, .7],
+                  "evidence": "比较本题两个部分并说明关系。", "confidence": .96, "progress": "blank",
+                  "reading": {"conditions": ["本题两个部分"], "ask": "说明关系", "anchors": []}}]
+    monkeypatch.setattr(page_prep, "inventory_page", lambda *_a: inventory)
+    def solve(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(5)
+        return SOLUTION
+    monkeypatch.setattr(page_prep, "solve_question", solve)
+    try:
+        scheduled = service.schedule(session, family["id"], image, force=True)
+        assert entered.wait(5)
+        with module.connect(module.settings.database_path) as db:
+            row = db.execute("SELECT reading_json,solution_json,verification_status FROM prepared_questions WHERE page_id=?",
+                             (scheduled["page_id"],)).fetchone()
+        assert json.loads(row["reading_json"]) == inventory[0]["reading"]
+        assert row["solution_json"] is None and row["verification_status"] == "pending"
+    finally:
+        release.set()
+        service.executor.shutdown(wait=True)
 
 SOLUTION = {"answer": "17", "steps": "逐项对应题目条件，完成计算后代回检查。",
             "confidence": .97, "ambiguous": False}
@@ -39,7 +106,9 @@ def prepared(monkeypatch, tmp_path):
     with module.transaction(module.settings.database_path) as db:
         db.execute("INSERT INTO page_preparations VALUES(?,?,?,?,?,?,?)",
                    ("current-page", session, image_fingerprint(image), "preparing", 1, now, now + 600))
-        db.execute("INSERT INTO prepared_questions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
+        db.execute("INSERT INTO prepared_questions(id,page_id,ordinal,path_json,label,evidence,"
+                   "box_json,progress,read_confidence,solution_json,solve_confidence,"
+                   "verification_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
             "current-question", "current-page", 0, '["1"]', "第1题", "比较本题两个部分并说明关系。",
             '[0.1,0.1,0.8,0.7]', "partial", .96, None, None, "pending"))
     service = PagePreparation(module.settings)

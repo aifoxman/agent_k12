@@ -5,6 +5,38 @@ import { createTeachingPlayback } from '../src/teaching-playback.js';
 const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
 const immediate = { pauseMs: 0, stepPauseMs: 0 };
 
+test('audio preparation is bounded to the next two clauses and cancellation releases them', async () => {
+  const warmed = [],
+    released = [],
+    played = [];
+  let release;
+  const lesson = createTeachingPlayback({
+    ...immediate,
+    prepare: (step) => {
+      warmed.push(step.speech);
+      return { text: step.speech, cancel: () => released.push(step.speech) };
+    },
+    play: async (step, { prepared, signal }) => {
+      played.push([step.speech, prepared.text]);
+      await new Promise((resolve) => {
+        release = resolve;
+        signal.addEventListener('abort', resolve, { once: true });
+      });
+      return true;
+    },
+  });
+  lesson.enqueue(['A', 'B', 'C', 'D', 'E'].map((speech) => ({ speech, step_id: 1 })));
+  assert.deepEqual(warmed, ['A', 'B']);
+  await settle();
+  assert.deepEqual(warmed, ['A', 'B', 'C']);
+  assert.deepEqual(played, [['A', 'A']]);
+  lesson.cancel();
+  release();
+  await lesson.done;
+  assert.ok(released.includes('B') && released.includes('C'));
+  assert.ok(!warmed.includes('D'));
+});
+
 test('streaming progress keeps its total provisional until the entire lesson arrives', async () => {
   let state;
   const lesson = createTeachingPlayback({

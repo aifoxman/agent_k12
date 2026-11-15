@@ -2,6 +2,26 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { splitTeachingBeat, splitTeachingSpeech, teachingSteps } from '../src/teaching-steps.js';
 
+test('sentence audio chunks keep one teaching step and reveal each condition with its own sentence', () => {
+  const beat = {
+    speech: '先看前面有5人。再看后面有6人。所以要找出这两部分和中间人的关系。',
+    step_id: 1,
+    step_title: '读题审题',
+    reply_mode: 'none',
+    page: [
+      { kind: 'underline', text: '5人' },
+      { kind: 'circle', text: '6人' },
+    ],
+  };
+  const parts = splitTeachingBeat(beat, { sentenceChunks: true, maxChars: 72 });
+  assert.equal(parts.length, 3);
+  assert.equal(parts.map((p) => p.speech).join(''), beat.speech);
+  assert.ok(parts.every((p) => p.step_id === 1 && p.reply_mode === 'none'));
+  assert.equal(parts.filter((p) => p.step_end).length, 1);
+  assert.ok(parts[0].page.some((p) => p.text === '5人'));
+  assert.ok(parts[1].page.some((p) => p.text === '6人'));
+});
+
 test('an operation and its reason remain a semantic passage; a later condition gets its own ink onset', () => {
   const beat = {
     speech:

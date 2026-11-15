@@ -93,6 +93,7 @@ from .page_prep import (
     solve_question,
 )
 from .reports import daily_report_details, session_review
+from .reading_review import reading_review
 from .security import hash_password, make_token, read_token, verify_password
 from .session_context import format_session_context
 from .teaching_ink import (
@@ -1722,6 +1723,21 @@ def set_correction_access(session_id: str, body: CorrectionAccess,
     return {"allowed": body.allowed, "authorized_until": until}
 
 
+def _offer_reading(session_id: str, image: bytes, label: str, box: list[float]) -> dict | None:
+    try:
+        prepared = page_preparation().match(session_id, image, label)
+        if not prepared:
+            return None
+        actual = prepared["box"]
+        cx, cy = actual[0] + actual[2] / 2, actual[1] + actual[3] / 2
+        if not (box[0] <= cx <= box[0] + box[2] and box[1] <= cy <= box[1] + box[3]):
+            return None
+        beat = reading_review(prepared, image)
+        return {"beat": beat, "box": actual, "label": prepared["label"]} if beat else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 @app.post("/v1/sessions/{session_id}/help-candidates")
 def help_candidate(session_id: str, image: UploadFile = File(...),
                    reference_image: UploadFile = File(...), activity_box: str = Form(...),
@@ -1739,7 +1755,8 @@ def help_candidate(session_id: str, image: UploadFile = File(...),
         box = None
     if not box:
         raise HTTPException(422, "Valid activity box required")
-    result = detect_help_candidate(settings, read_image(image), read_image(reference_image),
+    current_image = read_image(image)
+    result = detect_help_candidate(settings, current_image, read_image(reference_image),
                                    box, family["age_band"], family["grade"])
     if not result["found"]:
         return {"found": False}
@@ -1756,7 +1773,8 @@ def help_candidate(session_id: str, image: UploadFile = File(...),
                    (candidate_id, session_id, result["label"], result["evidence"],
                     json.dumps(result["box"]), result["confidence"], result["effort"],
                     now, now + 180))
-    return {"found": True, "id": candidate_id, **result}
+    return {"found": True, "id": candidate_id, **result,
+            "reading_review": _offer_reading(session_id, current_image, result["label"], result["box"])}
 
 
 @app.post("/v1/sessions/{session_id}/idle-checkin")
@@ -1811,7 +1829,9 @@ def idle_checkin(session_id: str, image: UploadFile = File(...),
                             json.dumps(located["box"]), located["confidence"], "extended",
                             now, now + 180))
             result.update(candidate_id=candidate_id, target_box=located["box"],
-                          target_label=located["label"])
+                          target_label=located["label"],
+                          reading_review=_offer_reading(session_id, current_image,
+                                                       located["label"], located["box"]))
     return result
 
 
@@ -2643,6 +2663,14 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
         except (OSError, ValueError):
             pass
     def events():
+        reading_beats = []
+
+        def explanation_beat(beat):
+            if not reading_beats:
+                return beat
+            return {**beat, "step_id": int(beat.get("step_id") or 1) + 1,
+                    "phase": "explanation"}
+
         yield _hint_event("status", {"label": ("正在核对你的回答…" if student_thought
                                               else "正在准备这道题的讲解…")})
         target_item = (cached if cached and cached["read_confidence"] >= .75 and
@@ -2724,6 +2752,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 yield _hint_event("error", {"detail": str(exc.detail)})
                 return
         def finish_beats(item: dict, beats: list[dict], delivery_complete: bool = True) -> dict:
+            beats = reading_beats + beats
             response_text = "".join(beat["speech"] for beat in beats)
             now, hid = current(), uid()
             result = {"id": hid, "response": response_text,
@@ -2761,6 +2790,18 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                          "label": target_item["label"],
                                          "question_id": target_item.get("id"),
                                          "teaching_tier": level})
+            if level == 1 and not student_thought and not previous_hint_id:
+                intro = reading_review(target_item, image_bytes)
+                if intro:
+                    reading_beats.append(intro)
+                    target_item = {**target_item, "_reading_delivered": intro["speech"],
+                                   "anchors": [*(target_item.get("anchors") or []), *[
+                                       {"id": mark["anchor_id"], "text": mark["text"],
+                                        "box": mark["box"], "confidence": .9}
+                                       for mark in intro["page"]]]}
+                    logger.info("hint_reading_ready cached=true elapsed_ms=%d",
+                                round((time.monotonic() - request_started) * 1000))
+                    yield _hint_event("beat", intro)
             if (target_item.get("id") and target_item.get("verification_status") == "pending"
                     and teaching_goal(question, student_thought or "", level) in {"worked_example", "explain_method"}):
                 label = ("正在核对每层积木与搬移位置…" if re.search(
@@ -2775,7 +2816,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             if (teaching_goal(question, student_thought or "", level) == "worked_example"
                     and (target_item.get("_solution_inflight") or target_item.get("_solution_error"))
                     and not _teaching_solution_ready(target_item)):
-                beat = unresolved_teaching_beat(target_item)
+                beat = explanation_beat(unresolved_teaching_beat(target_item))
                 yield _hint_event("beat", beat)
                 yield _hint_event("done", finish_beats(target_item, [beat]))
                 return
@@ -2828,6 +2869,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     ):
                         if kind != "beat" or quoted_target_conflict(beat["speech"], target_item["evidence"]):
                             continue
+                        beat = explanation_beat(beat)
                         spoken_beats.append(beat)
                         if not first_beat_logged:
                             logger.info("hint_first_beat session=%s cached=%s elapsed_ms=%d",
@@ -2863,6 +2905,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 ):
                     if kind != "beat" or quoted_target_conflict(beat["speech"], target_item["evidence"]):
                         continue
+                    beat = explanation_beat(beat)
                     text_beats.append(beat)
                     yield _hint_event("beat", beat)
                 if text_beats:
@@ -2887,7 +2930,10 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             if result.get("located") and result.get("target_box") and not result.get("answer_assessment"):
                 beats = fallback_teaching_beats(result["response"], result["target_box"],
                                                 result.get("visual_cue"), result)
-                result["visual_beats"] = beats
+                beats = [explanation_beat(beat) for beat in beats]
+                result["visual_beats"] = reading_beats + beats
+                if reading_beats:
+                    result["response"] = "".join(beat["speech"] for beat in reading_beats) + result["response"]
                 if result.get("id"):
                     with transaction(settings.database_path) as db:
                         db.execute("UPDATE hints SET teaching_json=? WHERE id=? AND session_id=?",

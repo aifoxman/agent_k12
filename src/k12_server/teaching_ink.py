@@ -1250,6 +1250,10 @@ def stream_teaching_beats(settings: Settings, page_image: bytes, focus_image: by
                f"口述核验（不是掌握证明）:{json.dumps(assessment or {}, ensure_ascii=False)}；"
                f"当次照片文字、点边及可见区域锚点:{json.dumps(target.get('anchors') or [], ensure_ascii=False)}；"
                "第一图为整页，第二图为局部题目。")
+    if target.get("_reading_delivered"):
+        details += ("本次已先行播报并圈划以下读题审题：" + target["_reading_delivered"]
+                    + "。直接承接这些已知条件讲实质思路及必要因果，不再开场、不重读整题，"
+                    "也不要再问孩子要不要提示。保留当前逻辑步内部的语句连续性。")
     payload = {"model": settings.ai_model, "temperature": .2, "messages": [
         {"role": "system", "content": instruction},
         {"role": "user", "content": [
