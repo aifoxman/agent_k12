@@ -4210,6 +4210,14 @@ select:focus {
   height: auto;
   max-height: 100%;
 }
+.immersive-active:not(.teaching-active) .camera-stage {
+  container-type: size;
+}
+.immersive-active:not(.teaching-active) .camera-media {
+  width: min(100cqw, calc(100cqh * (var(--camera-aspect, 4 / 3))));
+  height: min(100cqh, calc(100cqw / (var(--camera-aspect, 4 / 3))));
+  max-height: none;
+}
 .immersive-active .paper-header {
   position: absolute;
   z-index: 6;

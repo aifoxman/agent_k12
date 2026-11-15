@@ -56,6 +56,7 @@ import {
 } from './api';
 import { measurePaperFrame, recognizePaperText } from './paperPreflight';
 import { openCameraSource } from './camera-source';
+import { applyPaperCaptureProfile } from './camera-profile';
 import { recognizeHintAnchors } from './paper-vision-anchors';
 import { logicalTeachingSteps, teachingStepIndex } from './teaching-progress';
 import { keepPendingCameraPermission } from './camera-lifecycle';
@@ -3944,11 +3945,6 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     document.body.classList.add('camera-preview-fullscreen-open');
-    try {
-      window.PaperDisplay?.setPreviewFullscreen?.(true);
-    } catch {
-      /* Browser previews can still fill the application viewport. */
-    }
     const close = () => setCameraPreviewFullscreen(false);
     const onKey = (event) => {
       if (event.key !== 'Escape') return;
@@ -3962,17 +3958,26 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       window.removeEventListener('appbackground', close);
       document.body.style.overflow = previousOverflow;
       document.body.classList.remove('camera-preview-fullscreen-open');
-      try {
-        window.PaperDisplay?.setPreviewFullscreen?.(false);
-      } catch {
-        /* The native activity may already be closed. */
-      }
       requestAnimationFrame(() => {
         if (cameraPreviewSurface.current?.isConnected && cameraStageRef.current === 'preview')
           window.scrollTo(cameraPreviewScroll.current.x, cameraPreviewScroll.current.y);
       });
     };
   }, [cameraPreviewFullscreen]);
+  useEffect(() => {
+    try {
+      window.PaperDisplay?.setPreviewFullscreen?.(stage === 'active' || cameraPreviewFullscreen);
+    } catch {
+      /* Browser sessions use the application viewport. */
+    }
+    return () => {
+      try {
+        window.PaperDisplay?.setPreviewFullscreen?.(false);
+      } catch {
+        /* The native activity may already be closed. */
+      }
+    };
+  }, [stage, cameraPreviewFullscreen]);
   useEffect(
     () => () => {
       cameraOpenRef.current?.abort();
@@ -4364,14 +4369,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     setBatchConfirmOpen(false);
     setBatchAwaitingApproval(false);
     setBatchProgress('');
-    currentStream.current
-      ?.getVideoTracks()[0]
-      ?.applyConstraints({
-        width: { ideal: 1280 },
-        height: { ideal: 960 },
-        aspectRatio: { ideal: 4 / 3 },
-      })
-      .catch(() => {});
+    applyPaperCaptureProfile(cameraSourceRef.current).catch(() => {});
   };
   useEffect(() => {
     if (stage === 'paused' || (stage === 'active' && !correctionAllowed)) {
@@ -6226,15 +6224,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     setBatchOpen(true);
     setBatchProgress('请将作业页放稳，系统会自动识别并拍照');
     speak('请把作业放稳。我会自动拍清这一页；如果有下一页，直接翻页。');
-    currentStream.current
-      ?.getVideoTracks()[0]
-      ?.applyConstraints({
-        width: { ideal: 1600 },
-        height: { ideal: 1200 },
-        aspectRatio: { ideal: 4 / 3 },
-        resizeMode: { exact: 'none' },
-      })
-      .catch(() => {});
+    applyPaperCaptureProfile(cameraSourceRef.current, true).catch(() => {});
   };
   const addBatchPage = async () => {
     const run = batchRunRef.current;
@@ -6535,14 +6525,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         setBatchOpen(false);
         setBatchProgress('');
         setCorrectionOpen(true);
-        currentStream.current
-          ?.getVideoTracks()[0]
-          ?.applyConstraints({
-            width: { ideal: 1280 },
-            height: { ideal: 960 },
-            aspectRatio: { ideal: 4 / 3 },
-          })
-          .catch(() => {});
+        applyPaperCaptureProfile(cameraSourceRef.current).catch(() => {});
         onNotice(`${completed} 页已批改，家长端可逐页查看同一张截图`);
         speak(`${completed}页已经全部检查完。每页的批改与解题分析都已打开，可以查看截图上的标记。`);
       }
