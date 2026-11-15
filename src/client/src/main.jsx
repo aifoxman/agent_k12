@@ -3927,7 +3927,14 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   const cameraPreviewSurface = useRef(null);
   const cameraPreviewScroll = useRef({ x: 0, y: 0 });
   const toggleCameraPreviewFullscreen = () => {
-    if (stage !== 'preview' || !stream || cameraStarting || cameraRotating) return;
+    if (
+      !['preview', 'active'].includes(stage) ||
+      !stream ||
+      cameraStarting ||
+      cameraRotating ||
+      teachingVisible
+    )
+      return;
     if (!cameraPreviewFullscreen)
       cameraPreviewScroll.current = { x: window.scrollX, y: window.scrollY };
     setCameraPreviewFullscreen((shown) => !shown);
@@ -3938,7 +3945,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   const previewReturnStage = useRef('home');
   cameraStageRef.current = stage;
   useEffect(() => {
-    if (stage !== 'preview' || !stream) setCameraPreviewFullscreen(false);
+    if (!['preview', 'active'].includes(stage) || !stream) setCameraPreviewFullscreen(false);
   }, [stage, stream]);
   useEffect(() => {
     if (!cameraPreviewFullscreen) return;
@@ -3959,14 +3966,18 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       document.body.style.overflow = previousOverflow;
       document.body.classList.remove('camera-preview-fullscreen-open');
       requestAnimationFrame(() => {
-        if (cameraPreviewSurface.current?.isConnected && cameraStageRef.current === 'preview')
+        if (
+          cameraPreviewSurface.current?.isConnected &&
+          ['preview', 'active'].includes(cameraStageRef.current)
+        )
           window.scrollTo(cameraPreviewScroll.current.x, cameraPreviewScroll.current.y);
       });
     };
   }, [cameraPreviewFullscreen]);
+  const paperWindowFullscreen = stage === 'active' || cameraPreviewFullscreen;
   useEffect(() => {
     try {
-      window.PaperDisplay?.setPreviewFullscreen?.(stage === 'active' || cameraPreviewFullscreen);
+      window.PaperDisplay?.setPreviewFullscreen?.(paperWindowFullscreen);
     } catch {
       /* Browser sessions use the application viewport. */
     }
@@ -3977,7 +3988,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         /* The native activity may already be closed. */
       }
     };
-  }, [stage, cameraPreviewFullscreen]);
+  }, [paperWindowFullscreen]);
   useEffect(
     () => () => {
       cameraOpenRef.current?.abort();
@@ -7040,6 +7051,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     }
   };
   const teachingVisible = stage === 'active' && Boolean(hintTarget?.imageUrl);
+  useEffect(() => {
+    if (teachingVisible) setCameraPreviewFullscreen(false);
+  }, [teachingVisible]);
   const guidanceAvailable =
     stage === 'active' &&
     guidanceInScope(questionGuidance, {
@@ -7394,19 +7408,28 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             )}
           <div
             ref={cameraPreviewSurface}
-            className={`camera-stage ${!stream ? 'blank' : ''} ${stage === 'paused' && draftTarget ? 'has-preserved-draft' : ''} ${cameraPreviewFullscreen && stage === 'preview' ? 'camera-preview-fullscreen' : ''}`}
-            data-preview-fullscreen={cameraPreviewFullscreen && stage === 'preview'}
+            className={`camera-stage ${!stream ? 'blank' : ''} ${stage === 'paused' && draftTarget ? 'has-preserved-draft' : ''} ${cameraPreviewFullscreen && !teachingVisible ? 'camera-preview-fullscreen' : ''}`}
+            data-preview-fullscreen={cameraPreviewFullscreen && !teachingVisible}
             onClick={(event) => {
               if (event.target.closest('button, input, select, textarea, a')) return;
+              if (stage === 'active' && !cameraPreviewFullscreen) return;
               toggleCameraPreviewFullscreen();
             }}
           >
-            {stage === 'preview' && stream && (
+            {['preview', 'active'].includes(stage) && !teachingVisible && stream && (
               <>
                 <button
                   type="button"
                   className="camera-preview-expand"
-                  aria-label={cameraPreviewFullscreen ? '退出全屏预览' : '全屏预览相机'}
+                  aria-label={
+                    stage === 'active'
+                      ? cameraPreviewFullscreen
+                        ? '返回陪伴操作'
+                        : '全屏看纸面'
+                      : cameraPreviewFullscreen
+                        ? '退出全屏预览'
+                        : '全屏预览相机'
+                  }
                   aria-pressed={cameraPreviewFullscreen}
                   disabled={cameraStarting || cameraRotating}
                   onClick={(event) => {
@@ -7415,10 +7438,22 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                   }}
                 >
                   {cameraPreviewFullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
-                  {cameraPreviewFullscreen ? '返回预览' : '全屏'}
+                  {stage === 'active'
+                    ? cameraPreviewFullscreen
+                      ? '返回陪伴操作'
+                      : '全屏看纸面'
+                    : cameraPreviewFullscreen
+                      ? '返回预览'
+                      : '全屏'}
                 </button>
                 <span className="camera-preview-tap-hint" aria-hidden="true">
-                  {cameraPreviewFullscreen ? '再点画面返回预览' : '点按画面全屏查看'}
+                  {cameraPreviewFullscreen
+                    ? stage === 'active'
+                      ? '再点画面返回陪伴操作'
+                      : '再点画面返回预览'
+                    : stage === 'preview'
+                      ? '点按画面全屏查看'
+                      : '可全屏查看纸面'}
                 </span>
               </>
             )}
@@ -7507,7 +7542,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                   )}
                 </TeachingPaperFrame>
               )}
-              {stage === 'active' && !teachingVisible && (
+              {stage === 'active' && !teachingVisible && !cameraPreviewFullscreen && (
                 <SelectionBox
                   selection={selection}
                   strokes={selectionStrokes}

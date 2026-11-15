@@ -6028,7 +6028,8 @@ select:focus {
 }
 
 /* Enlarge the existing live surface; keep its stream and paper coordinates. */
-.child-main[data-camera-stage='preview'] .camera-stage.camera-preview-fullscreen {
+.child-main:is([data-camera-stage='preview'], [data-camera-stage='active'])
+  .camera-stage.camera-preview-fullscreen {
   position: fixed;
   inset: 0;
   z-index: 2000;
@@ -6043,11 +6044,17 @@ select:focus {
   container-type: size;
   cursor: zoom-out;
 }
-.child-main[data-camera-stage='preview'] .camera-stage.camera-preview-fullscreen .camera-media {
+.child-main:is([data-camera-stage='preview'], [data-camera-stage='active'])
+  .camera-stage.camera-preview-fullscreen
+  .camera-media {
   width: min(100cqw, calc(100cqh * (var(--camera-aspect, 4 / 3))));
   height: min(100cqh, calc(100cqw / (var(--camera-aspect, 4 / 3))));
   max-width: none;
 }
 body.camera-preview-fullscreen-open :is(.speech-caption, .activity-banner) {
   visibility: hidden;
+}
+.immersive-active .camera-preview-expand {
+  top: auto;
+  bottom: max(14px, env(safe-area-inset-bottom));
 }
