@@ -1542,13 +1542,18 @@ def start_session(body: SessionStart, claims: dict = Depends(principal)) -> dict
 
 @app.post("/v1/sessions/{session_id}/page-prep")
 def prepare_session_page(session_id: str, image: UploadFile = File(...),
+                         local_text_anchors: str | None = Form(None, max_length=65536),
                          claims: dict = Depends(principal)) -> dict:
     require_role(claims, "child")
     family = family_for(claims)
     session = family_session(session_id, family["id"])
     if session["status"] != "active" or session["device_id"] != claims["sub"]:
         raise HTTPException(409, "Session is not active on this device")
-    return page_preparation().schedule(session_id, family["id"], read_image(image))
+    image_bytes = read_image(image)
+    if local_text_anchors:
+        return page_preparation().schedule(session_id, family["id"], image_bytes,
+                                            local_text_anchors=local_text_anchors)
+    return page_preparation().schedule(session_id, family["id"], image_bytes)
 
 
 @app.patch("/v1/sessions/{session_id}/timer")

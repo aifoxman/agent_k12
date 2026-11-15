@@ -117,10 +117,19 @@ import {
 import { TaskEditor } from './task-editor';
 import { pendingTaskReminders, reminderSpeech } from './task-reminders';
 import { guardVoiceHoldSelection, setVoiceHoldGestureActive } from './voice-hold-gesture';
+
 import { paperMarkEdge, visiblePaperMarks } from './paper-marks';
 import { dashboardSpeechConfiguration, premiumVoiceQuota } from './premium-voice';
 import { createPenHintScheduler, penSelectionBounds, penSelectionReady } from './pen-selection';
 import './style.css';
+
+async function prefetchTeachingPage(sessionId, image) {
+  const form = new FormData();
+  form.append('image', image, 'paper.jpg');
+  const anchors = await recognizeHintAnchors(image);
+  if (anchors) form.append('local_text_anchors', JSON.stringify(anchors));
+  return api(`/v1/sessions/${sessionId}/page-prep`, { method: 'POST', body: form });
+}
 
 function selectSpeechAction(word, spoken) {
   window.dispatchEvent(new CustomEvent('paper-speech-choice', { detail: { word, spoken } }));
@@ -4566,14 +4575,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           if (msg.type === 'ai_preferences_changed') {
             refresh();
             capture(false, true, null, 1800)
-              .then((pageImage) => {
-                const prepForm = new FormData();
-                prepForm.append('image', pageImage, 'paper.jpg');
-                return api(`/v1/sessions/${sessionId}/page-prep`, {
-                  method: 'POST',
-                  body: prepForm,
-                });
-              })
+              .then((pageImage) => prefetchTeachingPage(sessionId, pageImage))
               .catch(() => {});
           }
           if (msg.type === 'annotation') {
@@ -5100,11 +5102,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       setSessionStartError(false);
       setResuming(false);
       if (checkedImage) {
-        const prepForm = new FormData();
-        prepForm.append('image', checkedImage, 'paper.jpg');
-        api(`/v1/sessions/${result.id}/page-prep`, { method: 'POST', body: prepForm }).catch(
-          () => {},
-        );
+        prefetchTeachingPage(result.id, checkedImage).catch(() => {});
       }
       await refresh();
       if (pendingSubmissionTaskId.current) {
@@ -5232,13 +5230,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                   form.append('previous_image', previousCrop.current, 'before.jpg');
                 form.append('kind', 'paper_change');
                 if (selectedTask) form.append('task_id', selectedTask);
-                const prepForm = new FormData();
-                prepForm.append('image', pageImage, 'paper.jpg');
                 // Preparation must start while the slower observation is still running.
-                api(`/v1/sessions/${sessionId}/page-prep`, {
-                  method: 'POST',
-                  body: prepForm,
-                }).catch(() => {});
+                prefetchTeachingPage(sessionId, pageImage).catch(() => {});
                 const result = await api(`/v1/sessions/${sessionId}/observations`, {
                   method: 'POST',
                   body: form,
@@ -5329,12 +5322,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           if (!cancelled) {
             stallReferenceRef.current = reference;
             if (result.referenceRefresh) {
-              const prepForm = new FormData();
-              prepForm.append('image', reference, 'paper.jpg');
-              api(`/v1/sessions/${sessionId}/page-prep`, {
-                method: 'POST',
-                body: prepForm,
-              }).catch(() => {});
+              prefetchTeachingPage(sessionId, reference).catch(() => {});
             }
           }
         } catch {

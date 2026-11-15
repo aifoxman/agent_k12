@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-from .ai import bounded_confidence, normalized_text_anchors, verify_teaching_anchors
+from .ai import normalized_text_anchors, verify_teaching_anchors
 from .teaching_ink import normalized_teaching_beat
 
 

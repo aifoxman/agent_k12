@@ -18,7 +18,8 @@ from threading import Lock
 
 from PIL import Image
 
-from .ai import bounded_confidence, normalized_box, parse_model_json, post_model, set_usage_family
+from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box,
+                 parse_model_json, post_model, set_usage_family)
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
@@ -161,6 +162,20 @@ def inventory_page(settings: Settings, image: bytes,
         })
         found[-1]["reading"] = normalize_reading(item.get("reading"), found[-1], image)
     return found
+
+
+def attach_reading_anchors(questions: list[dict], image: bytes, payload: str | None) -> None:
+    if not payload:
+        return
+    for item in questions:
+        reading = item.get("reading")
+        if not reading:
+            continue
+        anchors = local_teaching_text_anchors(payload, image, item["box"], item["evidence"])
+        spoken = re.sub(r"\s+", "", "".join(reading["conditions"]) + reading["ask"])
+        anchors = [anchor for anchor in anchors if re.sub(r"\s+", "", anchor["text"]) in spoken]
+        item["reading"] = normalize_reading(
+            {**reading, "anchors": anchors + reading.get("anchors", [])}, item, image)
 
 
 def solve_question(settings: Settings, image: bytes, question: dict,
@@ -373,7 +388,7 @@ class PagePreparation:
         self.solvers.shutdown(wait=False, cancel_futures=True)
 
     def schedule(self, session_id: str, family_id: str, image: bytes,
-                 *, force: bool = False) -> dict:
+                 *, force: bool = False, local_text_anchors: str | None = None) -> dict:
         config = preferences(self.settings.database_path, family_id)
         if not config["precompute_enabled"]:
             return {"status": "disabled", "page_id": None, "inventory_ready": False,
@@ -394,7 +409,7 @@ class PagePreparation:
                         page["status"] == "preparing" and not still_running):
                     continue
                 if page["status"] == "ready":
-                    self.refresh(session_id, family_id, page["id"], image, config)
+                    self.refresh(session_id, family_id, page["id"], image, config, local_text_anchors)
                 with connect(self.settings.database_path) as db:
                     counts = db.execute(
                         "SELECT COUNT(*) AS total,SUM(CASE WHEN verification_status IN "
@@ -430,22 +445,22 @@ class PagePreparation:
         with self.lock:
             self.inflight.add(page_id)
             self.last_refresh[page_id] = time.monotonic()
-        self.executor.submit(self._prepare, page_id, session_id, family_id, image, config)
+        self.executor.submit(self._prepare, page_id, session_id, family_id, image, config, local_text_anchors)
         return {"status": "preparing", "page_id": page_id,
                 "inventory_ready": False, "total": 0, "prepared": 0}
 
     def refresh(self, session_id: str, family_id: str, page_id: str,
-                image: bytes, config: dict) -> None:
+                image: bytes, config: dict, local_text_anchors: str | None = None) -> None:
         now = time.monotonic()
         with self.lock:
             if now - self.last_refresh.get(page_id, 0) < 45:
                 return
             self.last_refresh[page_id] = now
         self.executor.submit(self._refresh_progress, session_id, family_id,
-                             page_id, image, config)
+                             page_id, image, config, local_text_anchors)
 
     def _refresh_progress(self, session_id: str, family_id: str, page_id: str,
-                          image: bytes, config: dict) -> None:
+                          image: bytes, config: dict, local_text_anchors: str | None = None) -> None:
         set_usage_family(family_id)
         try:
             with connect(self.settings.database_path) as db:
@@ -454,6 +469,7 @@ class PagePreparation:
             if not page or page["status"] != "ready" or page["model_version"] != config["version"]:
                 return
             items = inventory_page(replace(self.settings, ai_model=config["locator_model"]), image)
+            attach_reading_anchors(items, image, local_text_anchors)
             if not items:
                 return
             changed_print = False
@@ -488,7 +504,7 @@ class PagePreparation:
                     db.execute("UPDATE page_preparations SET fingerprint=? WHERE id=? "
                                "AND status='ready'", (image_fingerprint(image), page_id))
             if changed_print:
-                self.schedule(session_id, family_id, image, force=True)
+                self.schedule(session_id, family_id, image, force=True, local_text_anchors=local_text_anchors)
         except Exception as exc:
             logger.warning("Page progress refresh failed: %s", type(exc).__name__)
 
@@ -500,7 +516,7 @@ class PagePreparation:
         return bool(row and row["status"] == "preparing" and row["session_status"] == "active")
 
     def _prepare(self, page_id: str, session_id: str, family_id: str,
-                 image: bytes, config: dict) -> None:
+                 image: bytes, config: dict, local_text_anchors: str | None = None) -> None:
         with self.lock:
             self.inventory_jobs.add(page_id)
         set_usage_family(family_id)
@@ -516,6 +532,7 @@ class PagePreparation:
             prior = next((json.loads(row["inventory_json"]) for row in prior_pages
                           if same_paper(row["fingerprint"], image_fingerprint(image))), None)
             questions = inventory_page(locator, image, prior) if prior else inventory_page(locator, image)
+            attach_reading_anchors(questions, image, local_text_anchors)
             if not self._current(session_id, page_id):
                 return
             if not questions:

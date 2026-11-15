@@ -1,10 +1,12 @@
 """Pre-solution reading uses literal conditions, never a guessed answer."""
 
 import io
+import json
 
 from PIL import Image, ImageDraw
 
 from k12_server.reading_review import normalize_reading, reading_review
+from k12_server.page_prep import attach_reading_anchors
 
 
 def paper():
@@ -56,4 +58,22 @@ def test_reading_marks_exclude_blank_positions_outside_words_and_inferred_geomet
     ]}
     reading = normalize_reading(value, item, paper())
     assert reading and not reading["anchors"]
+
+
+def test_scanning_caches_real_local_word_positions_before_the_lesson_and_rejects_another_frame():
+    from test_teaching_local_anchors import photo_payload, TARGET
+    image, payload = photo_payload()
+    item = {"confidence": .96, "read_confidence": .96, "label": "测试题", "box": TARGET,
+            "evidence": "长度15m，求长度是多少", "progress": "blank",
+            "reading": {"conditions": ["长度15m"], "ask": "长度是多少", "anchors": []}}
+    attach_reading_anchors([item], image, json.dumps(payload))
+    assert len(item["reading"]["anchors"]) == 1
+    review = reading_review(item, image)
+    assert review["page"][0]["anchor_id"] == "ocr_local_e_1"
+    assert review["page"][0]["kind"] == "underline"
+    assert "solution" not in item
+    payload["image_sha256"] = "0" * 64
+    item["reading"]["anchors"] = []
+    attach_reading_anchors([item], image, json.dumps(payload))
+    assert item["reading"]["anchors"] == []
 
