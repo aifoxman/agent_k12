@@ -286,8 +286,17 @@ def _number(value: str) -> int | None:
 
 
 def reference_numbers(reference: str) -> list[int]:
-    # Only scan number-like spans; ordinary Chinese question text is ignored.
-    return [number for token in re.findall(r"\d+|[一二三四五六七八九十]+", reference)
+    # "一种思路" and "第一步" do not name question 1. Only an explicit
+    # question reference or a standalone printed hierarchy may select a number.
+    reference = unicodedata.normalize("NFKC", reference).strip()
+    numerals = r"\d+|[一二三四五六七八九十]+"
+    if re.fullmatch(r"[\d一二三四五六七八九十、,.()\s-]+", reference):
+        tokens = re.findall(numerals, reference)
+    else:
+        tokens = [match.group(1) or match.group(2) for match in re.finditer(
+            rf"第\s*\(?\s*({numerals})\s*\)?\s*(?:大题|小题|题|问)"
+            r"|(?<![\d第])(\d+)\s*(?:大题|小题|题|问)", reference)]
+    return [number for token in tokens
             if (number := _number(token)) is not None]
 
 
@@ -296,6 +305,10 @@ def choose_question(questions: list[dict], reference: str, *, spoken: bool = Fal
     """Resolve incomplete references against page order and visible progress."""
     if not questions:
         return None
+    exact = [item for item in questions if item.get("label") and
+             _printed_key(item["label"]) == _printed_key(reference)]
+    if len(exact) == 1:
+        return exact[0]
     numbers = reference_numbers(reference)
     ordered = sorted(questions, key=lambda item: item["ordinal"])
     unfinished = [item for item in ordered

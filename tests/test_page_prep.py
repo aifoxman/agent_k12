@@ -42,6 +42,17 @@ def test_ambiguous_partial_reference_requires_clarification():
     assert choose_question(questions, "第二问", reviewing=True) is None
 
 
+def test_generic_method_words_cannot_silently_choose_question_one():
+    questions = [question("one", 0, ["1"], "done"), question("two", 1, ["2"], "done")]
+    for text in ["说明一种实质解题思路", "我们一起想一想", "先讲第一步", "读清这一题"]:
+        assert reference_numbers(text) == []
+        assert choose_question(questions, text, spoken=True) is None
+    assert reference_numbers("先讲第一步，再看第4题") == [4]
+    assert reference_numbers("二、3、(1)") == [2, 3, 1]
+    questions[1]["label"] = "研学挑战、2"
+    assert choose_question(questions, "研学挑战、2")["id"] == "two"
+
+
 def test_page_fingerprint_accepts_new_ink_but_rejects_changed_layout():
     def fingerprint(offset=0, handwriting=False):
         page = Image.new("RGB", (900, 1200), "white")
