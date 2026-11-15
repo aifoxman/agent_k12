@@ -7446,15 +7446,15 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                       ? '返回预览'
                       : '全屏'}
                 </button>
-                <span className="camera-preview-tap-hint" aria-hidden="true">
-                  {cameraPreviewFullscreen
-                    ? stage === 'active'
-                      ? '再点画面返回陪伴操作'
-                      : '再点画面返回预览'
-                    : stage === 'preview'
-                      ? '点按画面全屏查看'
-                      : '可全屏查看纸面'}
-                </span>
+                {(stage === 'preview' || cameraPreviewFullscreen) && (
+                  <span className="camera-preview-tap-hint" aria-hidden="true">
+                    {cameraPreviewFullscreen
+                      ? stage === 'active'
+                        ? '再点画面返回陪伴操作'
+                        : '再点画面返回预览'
+                      : '点按画面全屏查看'}
+                  </span>
+                )}
               </>
             )}
             <div className="camera-media" style={{ '--camera-aspect': cameraAspect }}>
