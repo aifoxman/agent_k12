@@ -50,7 +50,8 @@ def test_astra_requests_omit_unsupported_sampling_parameters(monkeypatch):
     assert "temperature" not in sent[2]
 
 
-def test_missing_sol_channel_falls_back_to_astra_and_remembers_it(monkeypatch):
+@pytest.mark.parametrize("status,code", [(503, "model_not_found"), (500, "model_price_error")])
+def test_missing_sol_channel_falls_back_to_astra_and_remembers_it(monkeypatch, status, code):
     import k12_server.ai as ai
 
     monkeypatch.setattr(ai, "_model_unavailable_until", {})
@@ -60,7 +61,7 @@ def test_missing_sol_channel_falls_back_to_astra_and_remembers_it(monkeypatch):
         model = kwargs["json"]["model"]
         seen.append(model)
         if model == "gpt-6.1-sol":
-            return httpx.Response(503, json={"error": {"code": "model_not_found"}},
+            return httpx.Response(status, json={"error": {"code": code}},
                                   request=httpx.Request("POST", url))
         return httpx.Response(200, json={"choices": []}, request=httpx.Request("POST", url))
 
@@ -74,7 +75,8 @@ def test_missing_sol_channel_falls_back_to_astra_and_remembers_it(monkeypatch):
     assert payload["model"] == "gpt-6.1-sol"
 
 
-def test_missing_sol_channel_falls_back_during_stream(monkeypatch):
+@pytest.mark.parametrize("status,code", [(503, "model_not_found"), (500, "model_price_error")])
+def test_missing_sol_channel_falls_back_during_stream(monkeypatch, status, code):
     import k12_server.ai as ai
 
     monkeypatch.setattr(ai, "_model_unavailable_until", {})
@@ -95,7 +97,7 @@ def test_missing_sol_channel_falls_back_during_stream(monkeypatch):
         model = kwargs["json"]["model"]
         seen.append(model)
         if model == "gpt-6.1-sol":
-            response = httpx.Response(503, json={"error": {"code": "model_not_found"}},
+            response = httpx.Response(status, json={"error": {"code": code}},
                                       request=httpx.Request("POST", url))
         else:
             response = httpx.Response(200, content=b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
@@ -107,6 +109,23 @@ def test_missing_sol_channel_falls_back_during_stream(monkeypatch):
                                ai_api_key="test", ai_timeout_seconds=10)
     assert list(ai.stream_model(settings, {"model": "gpt-6.1-sol", "temperature": .2})) == ["ok"]
     assert seen == ["gpt-6.1-sol", "gpt-6-astra"]
+
+
+@pytest.mark.parametrize("status,code", [(401, "model_price_error"), (403, "permission_denied"),
+                                      (429, "insufficient_quota"), (500, "server_error")])
+def test_unrelated_auth_quota_or_server_errors_do_not_switch_models(monkeypatch, status, code):
+    import k12_server.ai as ai
+    monkeypatch.setattr(ai, "_model_unavailable_until", {})
+    calls = []
+    def post(url, **kwargs):
+        calls.append(kwargs["json"]["model"])
+        return httpx.Response(status, json={"error": {"code": code}}, request=httpx.Request("POST", url))
+    monkeypatch.setattr(ai.httpx, "post", post)
+    settings = SimpleNamespace(ai_api_url="https://example.invalid/no-fallback", ai_api_key="test",
+                               ai_timeout_seconds=10)
+    with pytest.raises(httpx.HTTPStatusError):
+        ai.post_model(settings, {"model": "gpt-6.1-sol", "messages": []})
+    assert calls == ["gpt-6.1-sol"]
 
 
 def test_hint_attempt_requires_visible_evidence_and_never_certifies_learning(monkeypatch):

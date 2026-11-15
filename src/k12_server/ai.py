@@ -63,14 +63,17 @@ def _available_payload(settings: Settings, payload: dict) -> dict:
     return payload
 
 
-def _model_not_found(response: httpx.Response) -> bool:
-    if response.status_code not in {404, 503}:
+def _model_unavailable_response(response: httpx.Response) -> bool:
+    if response.status_code not in {404, 500, 503}:
         return False
     try:
         response.read()
         body = response.json()
         error = body.get("error") if isinstance(body, dict) else None
-        return isinstance(error, dict) and error.get("code") == "model_not_found"
+        if not isinstance(error, dict):
+            return False
+        return ((response.status_code in {404, 503} and error.get("code") == "model_not_found")
+                or (response.status_code == 500 and error.get("code") == "model_price_error"))
     except (ValueError, TypeError, httpx.HTTPError):
         return False
 
@@ -78,7 +81,7 @@ def _model_not_found(response: httpx.Response) -> bool:
 def _remember_unavailable(settings: Settings) -> None:
     with _model_availability_lock:
         _model_unavailable_until[_fallback_key(settings)] = time.monotonic() + 300
-    logger.warning("gpt-6.1-sol has no available channel; using gpt-6-astra for five minutes")
+    logger.warning("gpt-6.1-sol routing or pricing is unavailable; using gpt-6-astra for five minutes")
 
 
 def set_usage_family(family_id: str) -> None:
@@ -122,7 +125,7 @@ def post_model(settings: Settings, payload: dict, timeout: int | float | None = 
         json=payload,
         timeout=timeout or settings.ai_timeout_seconds,
     )
-    if allow_fallback and payload.get("model") == "gpt-6.1-sol" and _model_not_found(response):
+    if allow_fallback and payload.get("model") == "gpt-6.1-sol" and _model_unavailable_response(response):
         _remember_unavailable(settings)
         payload = {**payload, "model": "gpt-6-astra"}
         response = httpx.post(
@@ -187,7 +190,7 @@ def fast_vision_json(settings: Settings, payload: dict, task: str,
         except httpx.HTTPStatusError as exc:
             if index == 0 and len(models) > 1 and (
                     exc.response.status_code in {400, 404, 422}
-                    or _model_not_found(exc.response)):
+                    or _model_unavailable_response(exc.response)):
                 logger.warning("Fast vision unavailable for %s; retrying with primary model", task)
                 continue
             raise
@@ -224,7 +227,7 @@ def stream_model(settings: Settings, payload: dict):
                 headers={"Authorization": f"Bearer {settings.ai_api_key}"},
                 json={**payload, "stream": True}, timeout=settings.ai_timeout_seconds,
             ) as response:
-                if payload.get("model") == "gpt-6.1-sol" and _model_not_found(response):
+                if payload.get("model") == "gpt-6.1-sol" and _model_unavailable_response(response):
                     _remember_unavailable(settings)
                     payload = {**payload, "model": "gpt-6-astra"}
                     continue
