@@ -778,7 +778,7 @@ class PagePreparation:
             pages = db.execute(
                 "SELECT * FROM page_preparations WHERE session_id=? AND status IN "
                 "('preparing','ready') AND expires_at>? "
-                "ORDER BY CASE status WHEN 'ready' THEN 0 ELSE 1 END,created_at DESC LIMIT 8",
+                "ORDER BY created_at DESC,rowid DESC LIMIT 8",
                 (session_id, int(time.time()))).fetchall()
             rows = []
             for page in pages:

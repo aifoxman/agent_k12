@@ -120,6 +120,21 @@ def test_reading_priority_keeps_original_question_ordinals_and_avoids_repeat_cal
     finally:
         service.readers = original
 
+
+def test_fresh_reading_index_wins_over_an_older_fully_ready_page(prepared):
+    _, module, _, session, _, image, service = prepared
+    now = int(time.time())
+    with module.transaction(module.settings.database_path) as db:
+        db.execute("INSERT INTO page_preparations VALUES(?,?,?,?,?,?,?)",
+                   ("older-ready", session, image_fingerprint(image), "ready", 1, now-10, now+600))
+        db.execute("INSERT INTO prepared_questions(id,page_id,ordinal,path_json,label,evidence,box_json,"
+                   "progress,read_confidence,verification_status) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   ("old-question", "older-ready", 0, '["1"]', "旧题目", "旧的已完成备课",
+                    '[0.1,0.1,0.8,0.7]', "blank", .96, "verified"))
+    items = service.questions_for(session, image)
+    assert [item["id"] for item in items] == ["current-question"]
+    assert items[0]["verification_status"] == "pending"
+
 SOLUTION = {"answer": "17", "steps": "逐项对应题目条件，完成计算后代回检查。",
             "confidence": .97, "ambiguous": False}
 
