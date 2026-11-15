@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { splitTeachingBeat, splitTeachingSpeech, teachingSteps } from '../src/teaching-steps.js';
 
+test('a quoted question keeps its closing punctuation in the same audio sentence', () => {
+  const speech = '先读题：“这一队一共有多少人？”。接着留意“紧跟在后面”。';
+  const parts = splitTeachingBeat({ speech, step_id: 1 }, { sentenceChunks: true, maxChars: 72 });
+  assert.deepEqual(
+    parts.map((p) => p.speech),
+    ['先读题：“这一队一共有多少人？”。', '接着留意“紧跟在后面”。'],
+  );
+  assert.equal(parts.map((p) => p.speech).join(''), speech);
+});
+
 test('sentence audio chunks keep one teaching step and reveal each condition with its own sentence', () => {
   const beat = {
     speech: '先看前面有5人。再看后面有6人。所以要找出这两部分和中间人的关系。',

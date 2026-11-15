@@ -66,9 +66,9 @@ export function splitTeachingBeat(
   beat,
   { sourceBeatIndex = 0, maxChars = DEFAULT_MAX_CHARS, sentenceChunks = false } = {},
 ) {
-  const sentences = String(beat.speech || '').match(/[^。！？!?]*[。！？!?]+|[^。！？!?]+$/gu) || [
-    '',
-  ];
+  const sentences = String(beat.speech || '').match(
+    /[^。！？!?]*[。！？!?]+(?:[”’」』"')）】\]]+[。！？!?]*)?|[^。！？!?]+$/gu,
+  ) || [''];
   const cues = (beat.page || []).flatMap((mark) => [mark.anchor_text, mark.text]).filter(Boolean);
   const passages = [];
   let passage = '';
