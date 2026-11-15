@@ -83,6 +83,43 @@ def test_inventory_caches_reading_while_the_first_solution_is_still_running(prep
         release.set()
         service.executor.shutdown(wait=True)
 
+
+def test_reading_word_verification_finishes_without_a_solution(prepared, monkeypatch):
+    from test_teaching_local_anchors import photo_payload, TARGET
+    _, module, _, session, family, _, service = prepared
+    image, payload = photo_payload()
+    reading = {"conditions": ["长度15m"], "ask": "长度是多少", "anchors": []}
+    item = {"confidence": .96, "evidence": "长度15m，求长度是多少", "box": TARGET,
+            "reading": reading, "progress": "blank"}
+    with module.transaction(module.settings.database_path) as db:
+        db.execute("UPDATE prepared_questions SET evidence=?,box_json=?,reading_json=?",
+                   (item["evidence"], json.dumps(TARGET), json.dumps(reading)))
+    anchor = {**payload["anchors"][0], "id": "verified-word"}
+    monkeypatch.setattr(page_prep, "read_teaching_anchors", lambda *_a, **_k: [anchor])
+    config = module.preferences(module.settings.database_path, family["id"])
+    service._cache_reading_marks("current-page", session, family["id"], image, item, 0, config)
+    row = module.one("SELECT reading_json,solution_json FROM prepared_questions")
+    assert json.loads(row["reading_json"])["anchors"][0]["id"] == "verified-word"
+    assert row["solution_json"] is None
+
+
+def test_reading_priority_keeps_original_question_ordinals_and_avoids_repeat_calls(prepared):
+    from types import SimpleNamespace
+    _, module, _, session, family, image, service = prepared
+    service.settings = replace(service.settings, ai_api_url="https://example.invalid", ai_api_key="test")
+    queued = []
+    original = service.readers
+    service.readers = SimpleNamespace(submit=lambda _fn, *args: queued.append((args[5], args[4]["label"])))
+    items = [{"label": f"q{i}", "confidence": .96, "progress": "blank", "reading": {"anchors": []}}
+             for i in range(4)]
+    config = module.preferences(module.settings.database_path, family["id"])
+    try:
+        for _ in range(2):
+            service._queue_reading_marks("current-page", session, family["id"], image, items, config, [3,0,1,2])
+        assert queued == [(3,"q3"),(0,"q0"),(1,"q1"),(2,"q2")]
+    finally:
+        service.readers = original
+
 SOLUTION = {"answer": "17", "steps": "逐项对应题目条件，完成计算后代回检查。",
             "confidence": .97, "ambiguous": False}
 

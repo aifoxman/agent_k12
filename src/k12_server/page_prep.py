@@ -19,7 +19,8 @@ from threading import Lock
 from PIL import Image
 
 from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box,
-                 parse_model_json, post_model, set_usage_family)
+                 parse_model_json, post_model, read_teaching_anchors, set_usage_family,
+                 tight_teaching_anchor_image)
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
@@ -376,16 +377,70 @@ class PagePreparation:
         self.settings = settings
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-index")
         self.solvers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-solve")
+        self.readers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-read")
         self.lock = Lock()
         self.inflight: set[str] = set()
         self.inventory_jobs: set[str] = set()
         self.question_jobs: set[tuple[str, int]] = set()
         self.question_futures: dict[tuple[str, int], Future] = {}
         self.last_refresh: dict[str, float] = {}
+        self.reading_attempted: set[tuple[str, int]] = set()
 
     def close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.solvers.shutdown(wait=False, cancel_futures=True)
+        self.readers.shutdown(wait=False, cancel_futures=True)
+
+    def _queue_reading_marks(self, page_id: str, session_id: str, family_id: str,
+                             image: bytes, questions: list[dict], config: dict,
+                             priority: list[int] | None = None) -> None:
+        if not self.settings.ai_api_url or not self.settings.ai_api_key:
+            return
+        for ordinal in priority if priority is not None else range(len(questions)):
+            item = questions[ordinal]
+            reading = item.get("reading")
+            if (not reading or reading.get("anchors") or item["confidence"] < .85
+                    or item["progress"] == "occluded"):
+                continue
+            key = (page_id, ordinal)
+            with self.lock:
+                if key in self.reading_attempted:
+                    continue
+                self.reading_attempted.add(key)
+            self.readers.submit(self._cache_reading_marks, page_id, session_id, family_id,
+                                image, item, ordinal, config)
+
+    def _cache_reading_marks(self, page_id: str, session_id: str, family_id: str,
+                             image: bytes, item: dict, ordinal: int, config: dict) -> None:
+        set_usage_family(family_id)
+        def active():
+            with connect(self.settings.database_path) as db:
+                row = db.execute("SELECT p.status,p.model_version,s.status AS session_status "
+                                 "FROM page_preparations p JOIN sessions s ON s.id=p.session_id "
+                                 "WHERE p.id=? AND p.session_id=?", (page_id, session_id)).fetchone()
+            return (row and row["status"] in {"preparing", "ready"} and row["session_status"] == "active"
+                    and row["model_version"] == config["version"])
+        try:
+            if not active():
+                return
+            crop, region = tight_teaching_anchor_image(image, item["box"])
+            anchors = read_teaching_anchors(replace(self.settings, ai_model=config["locator_model"]),
+                                            crop, region, item["box"], item["evidence"])
+            reading = normalize_reading({**item["reading"], "anchors": anchors}, item, image)
+            if not reading or not reading["anchors"] or not active():
+                return
+            with transaction(self.settings.database_path) as db:
+                row = db.execute("SELECT reading_json,box_json,evidence FROM prepared_questions "
+                                 "WHERE page_id=? AND ordinal=?", (page_id, ordinal)).fetchone()
+                if (not row or json.loads(row["box_json"]) != item["box"]
+                        or row["evidence"] != item["evidence"]):
+                    return
+                current_reading = json.loads(row["reading_json"]) if row["reading_json"] else None
+                if current_reading and not current_reading.get("anchors"):
+                    db.execute("UPDATE prepared_questions SET reading_json=? WHERE page_id=? AND ordinal=?",
+                               (json.dumps(reading, ensure_ascii=False), page_id, ordinal))
+        except Exception as exc:
+            logger.warning("Reading mark preparation failed: %s", type(exc).__name__)
 
     def schedule(self, session_id: str, family_id: str, image: bytes,
                  *, force: bool = False, local_text_anchors: str | None = None) -> dict:
@@ -474,7 +529,7 @@ class PagePreparation:
                 return
             changed_print = False
             with transaction(self.settings.database_path) as db:
-                rows = db.execute("SELECT id,path_json,evidence FROM prepared_questions WHERE page_id=? "
+                rows = db.execute("SELECT id,path_json,evidence,reading_json FROM prepared_questions WHERE page_id=? "
                                   "ORDER BY ordinal", (page_id,)).fetchall()
                 if len(items) != len(rows):
                     old_paths = {tuple(json.loads(row["path_json"])) for row in rows}
@@ -496,6 +551,10 @@ class PagePreparation:
                     changed_print = changed_print or low_similarity > len(rows) / 2
                 if not changed_print:
                     for row, item in zip(rows, items, strict=True):
+                        old_reading = json.loads(row["reading_json"]) if row["reading_json"] else None
+                        if item.get("reading") and old_reading and not item["reading"].get("anchors"):
+                            item["reading"] = normalize_reading(
+                                {**item["reading"], "anchors": old_reading.get("anchors", [])}, item, image)
                         db.execute("UPDATE prepared_questions SET progress=?,read_confidence=?,"
                                    "box_json=?,label=?,reading_json=? WHERE id=?",
                                    (item["progress"], item["confidence"],
@@ -505,6 +564,8 @@ class PagePreparation:
                                "AND status='ready'", (image_fingerprint(image), page_id))
             if changed_print:
                 self.schedule(session_id, family_id, image, force=True, local_text_anchors=local_text_anchors)
+            else:
+                self._queue_reading_marks(page_id, session_id, family_id, image, items, config)
         except Exception as exc:
             logger.warning("Page progress refresh failed: %s", type(exc).__name__)
 
@@ -583,6 +644,10 @@ class PagePreparation:
                           if item["progress"] in {"partial", "blank"}), 0)
             priority = list(range(first, min(first + 3, len(questions))))
             priority.extend(i for i in range(len(questions)) if i not in priority)
+            # Word-position reading is independent of a slow or unavailable
+            # solver. Current unfinished questions still receive priority.
+            self._queue_reading_marks(page_id, session_id, family_id, image,
+                                      questions, config, priority)
             pending = [ordinal for ordinal in priority
                        if questions[ordinal]["progress"] != "occluded" and
                        question_keys_for_page[ordinal] not in cached]
