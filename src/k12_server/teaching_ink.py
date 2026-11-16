@@ -1255,6 +1255,7 @@ def stream_teaching_beats(settings: Settings, page_image: bytes, focus_image: by
                f"题目:{target['label']}；纸面题干:{target['evidence']}；"
                f"题干可读置信度:{target.get('read_confidence', target.get('confidence', 0))}；"
                f"教师内部解题依据:{str(solution.get('steps') or '')[:1200] if allow_diagram else '完整解法未核验，不作示意依据'}；"
+               f"教师内部检查依据:{str(solution.get('check') or '')[:400] if reliable else ''}；"
                f"已核对答案（仅按本轮答案许可使用）:{answer[:300] if allow_diagram else '未核验，不提供'}；提示层级:{level}；"
                f"上一轮提示:{previous_hint[:300]}；孩子刚才说:{student_thought[:300]}。"
                f"近期教学记录（不是当前答案证据）:{session_context[:1500]}；"
@@ -1263,7 +1264,7 @@ def stream_teaching_beats(settings: Settings, page_image: bytes, focus_image: by
                "第一图为整页，第二图为局部题目。")
     if target.get("_reading_delivered"):
         details += ("本次已先行播报并圈划以下读题审题：" + target["_reading_delivered"]
-                    + "。直接承接这些已知条件讲实质思路及必要因果，不再开场、不重读整题，"
+                    + "。直接承接上述题意与材料讲实质思路及必要因果，不再开场、不重读整题，"
                     "也不要再问孩子要不要提示。保留当前逻辑步内部的语句连续性。")
     payload = {"model": settings.ai_model, "temperature": .2, "messages": [
         {"role": "system", "content": instruction},

@@ -451,6 +451,8 @@ def grounded_check_status(item: dict, box: list[float] | None,
                                           and status != "needs_discussion" and not supported_blank)):
         return "unclear", False
     comparison = validated_choice_evaluation(item)
+    if isinstance(item.get("choice_evaluation"), dict) and comparison is None:
+        return "unclear", True
     if (comparison and status in {"looks_correct", "check_again"}
             and comparison["selection_matches"] != (status == "looks_correct")):
         return "unclear", True

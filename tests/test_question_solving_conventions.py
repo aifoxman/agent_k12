@@ -35,6 +35,18 @@ def run_solver(monkeypatch, raw, *, independent=False):
     return result, payloads, crops, question
 
 
+@pytest.mark.parametrize("check,reliable", [("验算：9+3=12", True), ("验算：9+3=13", False)])
+def test_solver_retains_check_and_does_not_promote_a_false_verification(monkeypatch, check, reliable):
+    raw = {"answer": "9", "steps": "12−3=9", "hint_seed": "先从总数去掉已用的部分。",
+           "check": check, "confidence": .96, "ambiguous": False}
+    result, _, _, _ = run_solver(monkeypatch, raw)
+    assert result["check"] == check
+    assert (result["confidence"] >= .85) is reliable
+    assert result["ambiguous"] is (not reliable)
+    if not reliable:
+        assert result["hint_seed"] == ""
+
+
 def test_solver_requests_evidenced_course_conventions_instead_of_purely_formal_ambiguity(monkeypatch):
     raw = {
         "answer": "依教材的不同拆法约定统计所有分类。",

@@ -335,7 +335,7 @@ def solve_question(settings: Settings, image: bytes, question: dict,
     return {
         "answer": answer,
         "steps": steps,
-        "check": check,
+        **({"check": check} if check else {}),
         "hint_seed": "" if conflict else seed,
         "confidence": 0 if conflict else bounded_confidence(raw.get("confidence")),
         "ambiguous": raw.get("ambiguous") is True or conflict,
