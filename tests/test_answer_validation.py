@@ -43,8 +43,9 @@ def choice_item():
                                   "selection_matches": True, "selected_statement_truth": "false"}}
 
 
-def test_negative_choice_can_select_a_false_statement_without_being_a_wrong_answer():
-    assert grounded_check_status(choice_item(), [.1, .1, .1, .1]) == ("looks_correct", False)
+@pytest.mark.parametrize("reason", ["D项说法不正确，选择符合题意。", "D项错误。", "D项表述有误，符合本题要求。"])
+def test_negative_choice_can_select_a_false_statement_without_being_a_wrong_answer(reason):
+    assert grounded_check_status({**choice_item(), "reason": reason}, [.1, .1, .1, .1]) == ("looks_correct", False)
 
 
 @pytest.mark.parametrize("change", [

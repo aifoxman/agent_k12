@@ -488,7 +488,8 @@ def grounded_check_status(item: dict, box: list[float] | None,
                 # For a literal negative-choice ask, a false statement can be
                 # exactly the right selection. Keep every actual student or
                 # requirement verdict, including mixed clauses, intact.
-                clause = re.sub(r"说法(?:是)?错误|说法(?:是)?不正确|(?:是)?错误的(?:说法|表述)|表述有误", "", clause)
+                if not re.search(r"题意|要求|订正|应改|选择|应选|选错", clause):
+                    clause = re.sub(r"错误|不正确|有误", "", clause)
             retained.append(clause)
         explanation = "。".join(retained)
     if status == "looks_correct" and any(word in explanation for word in (
@@ -1925,9 +1926,9 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
             "先逐字核对每组题目的书面要求、给定条件、图表和选项，再判断该组内每个答案；"
             "每项 evidence 必须写明对应的题目要求。若看不清要求，标为 unclear；"
             "若答案违反可见要求，标为 check_again，不得仅因写出的字本身成立就标为 looks_correct。"
-            "选择题还要逐项核对可见选项与学科知识，独立验证所选选项内容是否正确，"
+            "选择题还要逐项核对可见选项与学科知识，独立验证所选选项是否满足作答要求，"
             "不能仅因其他选项不符就判正确；"
-            "若可见选项没有正确答案或题目本身可能有误，标为 needs_discussion 并说明疑点，"
+            "若可见选项没有符合要求的答案或题目本身可能有误，标为 needs_discussion 并说明疑点，"
             "不能把孩子的选择画成正确。"
             "开放表达可能有多种合理答案；可针对可见作答给具体建议时使用 needs_discussion，"
             "不要把表达建议标成错误；没有足够依据时仍用 unclear。朗读等口头任务不能凭照片批改。"
@@ -2209,6 +2210,11 @@ def recheck_single(settings: Settings, page_image: bytes, focus_image: bytes,
         "\"comparison\":与孩子纸面答案和步骤的具体对照,\"diagram\":示意图或null,"
         "\"confidence\":0到1}。"
         "先独立解题再核对孩子作答，标准答案与孩子答案分开；只给教学解法，不输出内部推理记录。"
+        "选项真假不等于学生选择对错；选错误说法时，错误的说法可以是正确选择。"
+        "reason与comparison只评价学生是否满足作答要求。额外返回visible_question_text为可见题干原文；"
+        "单选题返回choice_evaluation={requirement:逐字作答要求,selected:孩子所选字母,expected:参考字母,"
+        "selection_matches:选择是否相同的布尔值,selected_statement_truth:true/false/not_applicable字符串}，其他题为null。"
+        "求解后回代原条件核验范围和单位，不能凭一次试算失败就声称无解。"
         "完整题干可读且解法可信时才填写参考答案；否则留空，不得猜测。"
         "必要时 diagram 用{caption,description,elements}；elements 最多24个，"
         "每个图元只允许 line/arrow(x1,y1,x2,y2)、rect(x,y,w,h)、circle(x,y,r)、"

@@ -903,7 +903,7 @@ def test_correction_downgrades_uncertain_or_unsupported_checks(monkeypatch):
         assert "不要因题目不是印刷的就跳过" in instruction
         assert "开放表达" in instruction
         assert "正确答案" in instruction
-        assert "可见选项没有正确答案" in instruction
+        assert "可见选项没有符合要求的答案" in instruction
         assert kwargs["timeout"] >= 240
         return FakeResponse()
 
