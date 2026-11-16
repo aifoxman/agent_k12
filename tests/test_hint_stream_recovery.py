@@ -91,6 +91,39 @@ def test_failed_recovery_clarifies_without_an_ordinary_third_location(api, monke
     assert [kind for kind, _ in events] == ["status", "done"]
 
 
+def test_selected_crop_keeps_visual_beats_and_same_image_second_tier(api, monkeypatch):
+    module, target = api[1], api[5]
+    locations = []
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: locations.append(1) or deepcopy(target))
+    monkeypatch.setattr(module, "analyze", lambda *_a, **_k: pytest.fail("selected crop fell into a plain-text response"))
+    monkeypatch.setattr(module, "stream_teaching_beats", lambda *_a: iter([("beat", {
+        "speech": "先把两个条件对应起来，因为它们说明同一个关系。",
+        "page": [], "scratch": [{"kind": "text", "role": "prose", "x": 4, "y": 4, "text": "对应已知条件"}],
+        "step_id": 1, "step_end": True, "reply_mode": "none", "teaching_move": "give_clue",
+    })]))
+    first, frames = ask(api, selected_region="true", level=1,
+                        question="请读题并解释方法，先不公布最终答案。")
+    assert first["target_box"] == target["box"] and first["visual_beats"]
+    assert any(kind == "target" for kind, _ in frames)
+    assert any(kind == "beat" for kind, _ in frames)
+    assert first["continuation_available"] is True
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: pytest.fail("continuation relocated the original crop"))
+    second, _ = ask(api, previous_hint_id=first["id"], level=2,
+                    question="请把这道题完整解答，包括答案与检查。")
+    assert second["target_box"] == first["target_box"]
+    assert second["delivery_complete"] is True
+    assert len(locations) == 1
+
+
+def test_unconfirmed_crop_does_not_bypass_location_or_invent_teaching(api, monkeypatch):
+    module, locations = api[1], []
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: locations.append(1) or {"found": False})
+    monkeypatch.setattr(module, "analyze", lambda *_a, **_k: pytest.fail("unconfirmed crop was taught"))
+    result, _ = ask(api, selected_region="true")
+    assert result["located"] is False
+    assert len(locations) == 2
+
+
 def test_pen_recovery_keeps_the_same_marks_and_does_not_bypass_a_failed_target(api, monkeypatch):
     module, locations = api[1], []
     marks = [[[.2, .3], [.5, .3]]]

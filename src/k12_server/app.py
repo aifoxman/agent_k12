@@ -2813,7 +2813,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                    "read_confidence": located.get("confidence", .8)}
             except (HTTPException, OSError, ValueError, TypeError):
                 target_item = None
-        if (not target_item and not (candidate_id or selected_region or selected_strokes is not None)):
+        if (not target_item and not (candidate_id or selected_strokes is not None)):
             try:
                 context = learning_context(session_id, task_id)
                 locator_settings = replace(settings, ai_model=preferences(
@@ -2827,7 +2827,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                    "read_confidence": located.get("confidence", .8)}
             except HTTPException:
                 pass
-        if not target_item and not selected_region:
+        if not target_item:
             # Reuse the existing ordinary-path location recovery before choosing
             # the transport. A recovered target still deserves structured teaching;
             # it must not silently become one long ordinary response.
@@ -3252,7 +3252,7 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
             return {"located": False, "target_box": None, "level": level,
                     "response": f"没能在当前纸面可靠找到{target[:50]}。如果有两页，请连同左页或右页一起说题号；也可读题目开头几个字，或在画面上圈画。"}
         focus_image, focus_region = focus_question_image(image_bytes, location["box"])
-    elif not selected_region:
+    else:
         location = locate_question(locator_settings, image_bytes, question[:200], teaching_context, True)
         if not location["found"]:
             return {"located": False, "target_box": None, "level": level,

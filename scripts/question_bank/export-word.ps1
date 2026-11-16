@@ -23,6 +23,6 @@ try {
     }
   }
 } finally {
-  $word.Quit(0)
+  $word.Quit()
   [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($word)
 }

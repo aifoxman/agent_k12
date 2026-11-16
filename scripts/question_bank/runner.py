@@ -155,6 +155,10 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
         raise ValueError("State is not owned by this isolated run")
     parent = {"Authorization": "Bearer " + state["parent_token"]}
     child = {"Authorization": "Bearer " + state["child_token"]}
+    if audio:
+        with httpx.Client(base_url=base, timeout=20, trust_env=False) as audio_client:
+            permission = audio_client.patch("/v1/families/voice-preferences", headers=parent, json={"enabled": True})
+            permission.raise_for_status()
     previous = None
     results = []
     for mode in modes:
@@ -244,7 +248,7 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                  "reference": oracle, "observed": record["response"], "api_timings": record.get("timings"),
                  "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
                  safe_image(output, record["image"]))
-            assessment = assess_review(assessment)
+            assessment = assess_review(assessment, record["response"])
         assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"])
         dump(destination, assessment)
         if split == "development":

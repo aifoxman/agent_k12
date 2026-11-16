@@ -29,7 +29,13 @@ RUBRIC = """你是独立的小学优秀辅导教师评审，不是被测后端�
 "scores":{"accuracy":4,"reasoning":4,"age_fit":4,"visual_structure":4,"coherence":4},
 "findings":[{"severity":"critical|major|minor","quote":"输出原文","path":"字段或事件路径",
 "basis":"参考依据","reason":"原因","suggestion":"通用改进"}],
+"hard_checks":{"target_correspondence":"pass|fail|needs_review",
+"reference_correspondence":"pass|fail|needs_review","answer_correct":"pass|fail|needs_review",
+"grading_correct":"pass|fail|not_applicable|needs_review","teaching_complete":"pass|fail|not_applicable|needs_review",
+"answer_permission":"pass|fail|not_applicable|needs_review"},
+"pass_evidence":"引用可核查的关键输出并说明为什么正确",
 "unassessed":["真实手写识别","实际音画同步"],"summary":"简短评语"}。
+hard_checks逐项先核查，明确答案或判分错误不论标成major还是critical都必须fail。
 没有可靠证据不得凑分通过；严重错误不得以流畅或速度抵消。"""
 
 ORACLE = """你是题库整理教师。图片是试卷第一页，文本是原文及附录答案。
@@ -45,6 +51,22 @@ ORACLE = """你是题库整理教师。图片是试卷第一页，文本是原�
 "proof_expression":"可选，仅纯数字四则分数表达式，用* / + - ** ()",
 "proof_result":"该表达式精确数值，无法用算式核查留空"}。
 坐标以整张图片左上为0,0，右下为1,1。不能找到可靠样本则usable=false并写reason。"""
+
+BLIND_ORACLE = """你是独立的小学教师，只看这张单题截图和年级，不知道附录答案或另一教师结论。
+先检查本题所有条件、选项和必要图形是否完整入镜，是否混入标准答案/解析或别题；
+缺少必要图形、题干/选项被裁切、听力无音频、已印答案时都不能充当空白待解题。
+独立解题并检查单位和题目要求；仅返回JSON：
+{"complete":true,"no_printed_answer":true,"single_question":true,"question_text":"完整题干",
+"final_answer":"简洁最终答案，保留单位；多空按原题顺序",
+"solution":"公开可核查的解题步骤与检验，不输出内部思维链",
+"confidence":0.95}。不能可靠解答则confidence小于0.8。"""
+
+REFERENCE_CHECK = """核对这张单题截图的两份独立解答与附录引用。
+必须确认引用是本题题号的答案而非别题，独立解答和参考在数学/语义上等价，
+模拟错误作答确实错误而非另一合理表达，并确认完整题干、选项、必要图形都入镜且未印答案。
+对单位、顺序、多个空、选择题选项字母与数值分别核对，不能仅因出现相同数字就判一致。
+仅返回JSON：{"reference_corresponds":true,"solutions_equivalent":true,"wrong_answer_invalid":true,
+"crop_complete":true,"no_printed_answer":true,"evidence":"具体对应依据"}。不确定填false。"""
 
 
 def normalize(text: str) -> str:
@@ -139,7 +161,7 @@ def validate_oracle(spec: dict, document: dict, page_text: str) -> dict:
             "proof_status": proof, "reference_status": "source_quote_checked_not_absolute_truth"}
 
 
-def assess_review(review: dict) -> dict:
+def assess_review(review: dict, observed: dict | None = None) -> dict:
     findings = review.get("findings") or []
     scores = review.get("scores") or {}
     required = {"accuracy", "reasoning", "age_fit", "visual_structure", "coherence"}
@@ -153,6 +175,24 @@ def assess_review(review: dict) -> dict:
         review["verdict"] = "fail"
     if review.get("verdict") not in {"pass", "fail", "needs_review"}:
         review["verdict"] = "needs_review"
+    if observed is not None:
+        checks = review.get("hard_checks") or {}
+        required_checks = {"target_correspondence", "reference_correspondence", "answer_correct", "grading_correct", "teaching_complete", "answer_permission"}
+        if any(v == "fail" for v in checks.values()):
+            review["verdict"] = "fail"
+        elif set(checks) != required_checks or any(v not in {"pass", "not_applicable"} for v in checks.values()):
+            review["verdict"] = "needs_review"
+        if checks.get("reference_correspondence") != "pass" or checks.get("answer_correct") != "pass":
+            if review["verdict"] == "pass": review["verdict"] = "needs_review"
+        if review["verdict"] == "pass" and not str(review.get("pass_evidence") or "").strip():
+            review["verdict"] = "needs_review"
+        observed_text = normalize(json.dumps(observed, ensure_ascii=False))
+        for finding in findings:
+            quote = normalize(finding.get("quote", ""))
+            if quote and quote not in observed_text:
+                review["verdict"] = "needs_review"
+                review["citation_error"] = True
+                break
     review["mean_score"] = round(sum(values) / 5, 2) if valid else None
     return review
 
@@ -160,7 +200,9 @@ def assess_review(review: dict) -> dict:
 def distill(record: dict, review: dict, path: Path):
     """Only reference-grounded, independently passed output is an eligible example."""
     eligible = (record.get("split") == "development" and review.get("verdict") == "pass"
-                and review.get("reference_reliable") is True and not record.get("error"))
+                and review.get("reference_reliable") is True and not record.get("error")
+                and review.get("hard_checks", {}).get("reference_correspondence") == "pass"
+                and review.get("hard_checks", {}).get("answer_correct") == "pass")
     dump(path, {"eligible_for_training": eligible, "weight_training_performed": False,
                 "case_id": record["case_id"], "source_sha256": record.get("source_sha256"),
                 "version": record.get("source_commit"), "input_image": record.get("image"),
