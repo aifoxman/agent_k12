@@ -132,6 +132,15 @@ def test_reasoning_before_the_selection_can_be_graded_without_losing_the_solutio
     assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
 
 
+@pytest.mark.parametrize("answer", ["C，同时选择A", "C。最终答案是A", "AD", "C或A"])
+def test_positive_explanation_cannot_hide_an_explicit_ambiguous_single_choice(answer):
+    item = {**choice_item(), "answer": answer, "reference_answer": "C", "reason": "选择符合题目要求。",
+            "visible_question_text": "下列正确的一项是", "choice_evaluation": {
+                "requirement": "正确的一项", "selected": "C", "expected": "C",
+                "selection_matches": True, "selected_statement_truth": "true"}}
+    assert grounded_check_status(item, [.1, .1, .1, .1]) == ("unclear", True)
+
+
 def test_false_equation_cannot_survive_in_cached_teaching_or_grading_solution():
     solution = {"answer": "8", "steps": "12−3=8", "confidence": .99, "ambiguous": False}
     assert not grounded_teaching_solution(solution, .99)

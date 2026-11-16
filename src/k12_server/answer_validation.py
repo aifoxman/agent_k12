@@ -79,29 +79,34 @@ def arithmetic_conflict(*texts: object) -> bool:
 
 
 def choice_letter(value: object) -> str | None:
+    return parse_choice(value)[0]
+
+
+def parse_choice(value: object) -> tuple[str | None, bool]:
+    """Keep an explicit ambiguous selection distinct from unsupported free text."""
     if not isinstance(value, str):
-        return None
+        return None, False
     match = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(.*)$", value, re.S)
     if not match:
         # A student may write the reasoning first and the selection last.
         declarations = list(re.finditer(r"(?:选(?:择)?|答案(?:是|为|[:：]))\s*([A-H])(?=$|[^A-Za-z])", value))
         if len({m[1] for m in declarations}) != 1:
-            return None
+            return None, len({m[1] for m in declarations}) > 1
         declaration = declarations[0]
         prefix = value[max(0, declaration.start() - 10):declaration.start()]
         if re.search(r"(?:不能|不|不是|别)\s*$|(?:可能|也许|或许).{0,4}$", prefix):
-            return None
+            return None, True
         # Reuse the same ambiguity/retraction checks for the remainder.
-        return choice_letter(declaration[1] + value[declaration.end():])
+        return parse_choice(declaration[1] + value[declaration.end():])
     rest = match[2].strip()
     if not rest or re.fullmatch(r"[）).。\s]+", rest):
-        return match[1]
+        return match[1], False
     if not re.match(r"^[）).。:：，,；;（(]", rest):
-        return None
+        return None, bool(re.match(r"[A-H]|(?:和|与|或|及|and\b|or\b).*?[A-H]", rest))
     explanation = rest.lstrip("）).。:：，,；;（( ")
     if (re.match(r"[A-H](?:$|[\s、，,。.)）])", explanation)
             or re.search(r"(?:不是|不选|应选|改选|而是|或者|或)\s*[A-H]", explanation)):
-        return None
+        return None, True
     for assertion in re.finditer(r"(?:选(?:择)?|答案(?:是|为)?|最终(?:答案)?(?:是|为)?|其实|应该是|应为|[和与及或])\s*([A-H])", explanation):
         if assertion[1] == match[1]:
             continue
@@ -110,10 +115,10 @@ def choice_letter(value: object) -> str | None:
         # selection declaration makes the observed answer ambiguous.
         if re.search(r"(?:不能|不要|不应|不|别)\s*$", prefix) and not re.search(r"不能不\s*$", prefix):
             continue
-        return None
+        return None, True
     if any(letter != match[1] for letter in re.findall(r"([A-H])(?:才是|才对|是正确答案|是最终答案)", explanation)):
-        return None
-    return match[1]
+        return None, True
+    return match[1], False
 
 
 def validated_choice_evaluation(item: dict) -> dict | None:
@@ -139,7 +144,9 @@ def choice_comparison_conflict(item: dict) -> bool:
     value = item.get("choice_evaluation")
     if not isinstance(value, dict) or not str(item.get("answer") or "").strip():
         return False
-    selected, expected = choice_letter(item.get("answer")), choice_letter(item.get("reference_answer"))
+    (selected, ambiguous), expected = parse_choice(item.get("answer")), choice_letter(item.get("reference_answer"))
+    if ambiguous and expected and item.get("status") == "looks_correct":
+        return True
     if (selected and isinstance(value.get("selected"), str) and len(value["selected"]) == 1
             and value["selected"] in "ABCDEFGH" and value["selected"] != selected):
         return True
