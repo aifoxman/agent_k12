@@ -242,6 +242,17 @@ test('scratch prose matches its phrase while a diagram remains coherent and futu
   assert.equal(steps.flatMap((step) => step.scratch).length, scratch.length);
 });
 
+test('one verified entry clue is available while reading; a later numeric result remains hidden', () => {
+  const clue = { kind: 'text', role: 'prose', preview: true, text: '先看第5个是否包括本人。' };
+  const result = { kind: 'text', role: 'prose', text: '5+1+12' };
+  const parts = splitTeachingBeat(
+    { speech: '先读清已知条件。再说明我们要求什么。', scratch: [clue, result] },
+    { sentenceChunks: true },
+  );
+  assert.deepEqual(parts[0].scratch, [clue]);
+  assert.deepEqual(parts.at(-1).scratch, [result]);
+});
+
 test('logical-step metadata survives splitting without making subclauses manual steps', () => {
   const beat = {
     id: 'source-42',

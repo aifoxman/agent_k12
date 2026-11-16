@@ -2870,6 +2870,17 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                         round((time.monotonic() - request_started) * 1000))
             prepared_intro = (reading_review(target_item, image_bytes)
                               if not student_thought and not previous_hint_id else None)
+            # Show the verified entry clue while reading, without waiting for
+            # another model rewrite or adding a compulsory interaction step.
+            if prepared_intro and level == 1 and _teaching_solution_ready(target_item):
+                seed = str((target_item.get("solution") or {}).get("hint_seed") or "").strip()
+                answer = str((target_item.get("solution") or {}).get("answer") or "")
+                if (8 <= len(seed) <= 180 and not reveals_final_answer(seed, answer)
+                        and not quoted_target_conflict(seed, target_item["evidence"])
+                        and not re.search(r"后台|模型|置信|看不清|无法确定|不能确定|答案|结果|等于|得出|最终|[=＝]", seed)):
+                    prepared_intro["scratch"] = [{"kind": "text", "role": "prose",
+                                                  "x": 6, "y": 8, "text": seed,
+                                                  "preview": True}]
             yield _hint_event("target", {"box": target_item["box"],
                                          "label": target_item["label"],
                                          "question_id": target_item.get("id"),

@@ -129,7 +129,8 @@ export function splitTeachingBeat(
       element.kind === 'text' && element.role === 'prose' ? findTextStep(element.text) : -1;
     const thinking =
       element.role === 'prose' &&
-      !/结果|答案|得数|最后|合计|一共|[=＝\d]/u.test(element.text || '');
+      (element.preview === true ||
+        !/结果|答案|得数|最后|合计|一共|[=＝0-9]/u.test(element.text || ''));
     const index =
       match >= 0
         ? match

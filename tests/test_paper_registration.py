@@ -252,6 +252,31 @@ def test_reference_photo_and_stream_require_the_active_child_device(prepared):
     assert client.get(base + "/image", headers=parent(client, "another@example.com")).status_code == 403
 
 
+@pytest.mark.parametrize("seed,expected", [
+    ("先想一想这两个部分之间有什么关系，再把条件对应起来。", True),
+    ("这道题的最终答案是17，直接写下来。", False),
+    ("后台模型会继续生成讲解，请稍等一下。", False),
+])
+def test_only_verified_non_answer_entry_clue_can_appear_on_the_initial_thinking_board(prepared, monkeypatch, seed, expected):
+    from test_prepared_lesson_wait import SOLUTION, ask, events
+    _, module, _, _, _, _, _ = prepared
+    solution = {**SOLUTION, "hint_seed": seed}
+    with module.transaction(module.settings.database_path) as db:
+        db.execute("UPDATE prepared_questions SET verification_status='verified',solution_json=?,reading_json=?",
+                   (json.dumps(solution), json.dumps({"conditions": ["本题两个部分"], "ask": "说明关系", "anchors": []})))
+    monkeypatch.setattr(module, "stream_teaching_beats", lambda *_a: iter([("beat", {
+        "speech": "接着比较这两个部分的关系。", "step_id": 1, "step_end": True,
+        "page": [], "scratch": [], "reply_mode": "none", "teaching_move": "give_clue"})]))
+    response = ask(prepared, question="读题并说明解题思路")
+    intro = next(data for kind, data in events(response) if kind == "beat")
+    assert intro["phase"] == "reading"
+    assert bool(intro["scratch"]) is expected
+    if expected:
+        assert intro["scratch"][0]["preview"] is True
+        assert intro["scratch"][0]["text"] == seed
+        assert seed not in intro["speech"], "The thinking preview added another compulsory spoken turn"
+
+
 def test_selected_planned_question_can_run_before_the_page_worker_finishes(prepared, monkeypatch):
     from threading import Event
     from test_prepared_lesson_wait import SOLUTION
