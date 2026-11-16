@@ -5,7 +5,7 @@ import json
 
 from PIL import Image, ImageDraw
 
-from k12_server.reading_review import normalize_reading, reading_review
+from k12_server.reading_review import normalize_reading, reading_review, reading_anchors_complete
 from k12_server.page_prep import attach_reading_anchors
 
 
@@ -33,6 +33,19 @@ def test_reading_is_available_without_any_solution_and_does_not_introduce_an_ans
     assert "多少人" in review["speech"] and "12" not in review["speech"]
     assert review["scratch"] == []
     assert review["reading_key"] == reading_review(item, paper())["reading_key"]
+
+
+def test_first_reading_sentence_uses_an_available_grounded_condition_and_preserves_all_givens():
+    item = question()
+    item["reading"] = {"conditions": ["前面有5人", "后面有6人"], "ask": "多少人", "anchors": [
+        {"id": "six", "text": "后面有6人", "confidence": .97, "box": [.13, .18, .22, .05]}]}
+    beat = reading_review(item, paper())
+    assert beat and beat["page"]
+    assert beat["speech"].index("后面有6人") < beat["speech"].index("前面有5人")
+    assert "多少人" in beat["speech"] and "12" not in beat["speech"]
+    assert not reading_anchors_complete(item["reading"])
+    assert reading_anchors_complete({**item["reading"], "anchors": [
+        {"text": "前面"}, {"text": "后面"}, {"text": "多少人"}]})
 
 
 def test_reading_rejects_fabricated_conditions_inferred_results_and_missing_question():

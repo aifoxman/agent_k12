@@ -26,7 +26,7 @@ from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
-from .reading_review import normalize_reading
+from .reading_review import normalize_reading, reading_anchors_complete
 from .paper_registration import IDENTITY, complete_answer_regions, map_box, stroke_scores, valid_transform
 from .reading_review import reading_review
 
@@ -503,7 +503,7 @@ class PagePreparation:
             ordinal = index + base_ordinal
             item = questions[index]
             reading = item.get("reading")
-            if (not reading or reading.get("anchors") or item["confidence"] < .85
+            if (not reading or reading_anchors_complete(reading) or item["confidence"] < .85
                     or item["progress"] == "occluded"):
                 continue
             key = (page_id, ordinal)
@@ -530,7 +530,8 @@ class PagePreparation:
             crop, region = tight_teaching_anchor_image(image, item["box"])
             anchors = read_teaching_anchors(replace(self.settings, ai_model=config["locator_model"]),
                                             crop, region, item["box"], item["evidence"])
-            reading = normalize_reading({**item["reading"], "anchors": anchors}, item, image)
+            reading = normalize_reading({**item["reading"], "anchors": [
+                *item["reading"].get("anchors", []), *anchors]}, item, image)
             if not reading or not reading["anchors"] or not active():
                 return
             with transaction(self.settings.database_path) as db:
@@ -540,7 +541,9 @@ class PagePreparation:
                         or row["evidence"] != item["evidence"]):
                     return
                 current_reading = json.loads(row["reading_json"]) if row["reading_json"] else None
-                if current_reading and not current_reading.get("anchors"):
+                if current_reading and not reading_anchors_complete(current_reading):
+                    reading = normalize_reading({**current_reading, "anchors": [
+                        *current_reading.get("anchors", []), *reading["anchors"]]}, item, image)
                     db.execute("UPDATE prepared_questions SET reading_json=? WHERE page_id=? AND ordinal=?",
                                (json.dumps(reading, ensure_ascii=False), page_id, ordinal))
         except Exception as exc:
@@ -1026,12 +1029,16 @@ class PagePreparation:
             item = dict(row)
             item["box"] = json.loads(item["box_json"])
             intro = reading_review(item, frame)
+            raw_reading = json.loads(item["reading_json"]) if item["reading_json"] else None
+            covered = (reading_anchors_complete({**raw_reading, "anchors": intro["page"]})
+                       if raw_reading and intro else False)
             items.append({"id": item["id"], "label": item["label"], "box": item["box"],
                           "path": json.loads(item["path_json"]), "progress": item["progress"],
                           "read_confidence": item["read_confidence"],
                           "answer_regions": json.loads(item["regions_json"] or "[]"),
                           "reading": intro, "reading_ready": bool(intro),
-                          "anchors_ready": bool(intro and intro["page"]),
+                          "anchors_ready": covered,
+                          "anchor_count": len(intro["page"]) if intro else 0,
                           "solution_ready": item["verification_status"] in {"verified", "rechecked"}})
         return {"page_id": page_id, "frame_sha256": hashlib.sha256(frame).hexdigest(),
                 "status": page["status"], "questions": complete_answer_regions(items),

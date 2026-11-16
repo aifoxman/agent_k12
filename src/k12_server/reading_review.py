@@ -8,6 +8,15 @@ from .ai import normalized_text_anchors, verify_teaching_anchors
 from .teaching_ink import normalized_teaching_beat
 
 
+def reading_anchors_complete(reading: dict | None) -> bool:
+    if not reading or not reading.get("conditions") or not reading.get("ask"):
+        return False
+    compact = lambda value: re.sub(r"\s+", "", value)
+    terms = [compact(anchor.get("text", "")) for anchor in reading.get("anchors", [])]
+    return all(any(term and term in compact(text) for term in terms)
+               for text in [*reading["conditions"], reading["ask"]])
+
+
 def normalize_reading(value: object, question: dict, image: bytes) -> dict | None:
     if not isinstance(value, dict) or question.get("confidence", 0) < .85:
         return None
@@ -44,11 +53,24 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     reading = normalize_reading(reading, {**question, "confidence": question["read_confidence"]}, image)
     if not reading:
         return None
-    first, *remaining = reading["conditions"]
-    speech = (f"先看{question['label']}，题目告诉我们“{first}”。"
+    anchors = reading["anchors"]
+    compact = lambda value: re.sub(r"\s+", "", value)
+    grounded = lambda text: any(compact(a["text"]) in compact(text) for a in anchors)
+    conditions = list(reading["conditions"])
+    # Begin with a real cue the child can see immediately. This changes only
+    # the order of the same literal givens, never adds a condition or an answer.
+    if not grounded(reading["ask"]):
+        conditions.sort(key=lambda text: not grounded(text))
+    label = question["label"]
+    if re.fullmatch(r"\d+", label):
+        label = f"第{label}题"
+    first, *remaining = conditions
+    speech = (f"先看{label}，题目告诉我们“{first}”。"
               + "".join(f"还有一个条件是“{text}”。" for text in remaining)
               + f"要我们求的是“{reading['ask']}”。")
-    anchors = reading["anchors"]
+    if grounded(reading["ask"]):
+        speech = (f"先看{label}，这道题要我们求的是“{reading['ask']}”。"
+                  + "".join(f"题目告诉我们“{text}”。" for text in conditions))
     beat = normalized_teaching_beat({
         "speech": speech, "step_id": 1, "step_title": "读题审题", "step_end": True,
         "teaching_move": "give_clue", "reply_mode": "none", "needs_parent": False,
