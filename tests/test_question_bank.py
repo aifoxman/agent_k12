@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.question_bank.budget import Budget, BudgetExceeded
-from scripts.question_bank.corpus import docx_content, inventory
+from scripts.question_bank.corpus import docx_content, inferred_subject, inventory
 from scripts.question_bank.prepare import group_cases
 from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
 from scripts.question_bank.simulation import percentile, safe_image
@@ -34,6 +34,13 @@ def test_source_answers_are_separated_even_when_filename_has_no_answer(tmp_path)
     index = inventory(tmp_path, tmp_path / "output")
     assert index["records"][0]["grade"] == 1
     assert source.read_bytes() == original
+
+
+def test_subject_can_come_from_a_real_header_or_pep_without_guessing_mixed_headings():
+    assert inferred_subject("人教PEP版三年级期末卷.docx", {}) == "english"
+    assert inferred_subject("PEP English grade 3.docx", {}) == "english"
+    assert inferred_subject("毕业试卷.docx", {"paragraphs": ["六年级数学期末试卷"]}) == "math"
+    assert inferred_subject("无科目.docx", {"paragraphs": ["语文和数学成绩分析"]}) == "unknown"
 
 
 def test_reference_fields_cannot_enter_production_form():

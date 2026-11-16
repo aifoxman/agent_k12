@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from scripts.question_bank.budget import Budget
-from scripts.question_bank.corpus import backfill, choose_documents, dump, inventory, read
+from scripts.question_bank.corpus import backfill, choose_documents, classify_cached, dump, inventory, read
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,6 +32,7 @@ def main():
     commands.add_parser("freeze-final")
     commands.add_parser("export")
     commands.add_parser("backfill")
+    commands.add_parser("classify")
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--limit", type=int, default=1000)
     seal = commands.add_parser("seal")
@@ -69,6 +70,8 @@ def main():
         print(json.dumps({"files": len(value["records"]), "selected": len(records), "errors": len(value["errors"])}))
     elif args.command == "backfill":
         print(json.dumps(backfill(output)))
+    elif args.command == "classify":
+        print(json.dumps(classify_cached(output)))
     elif args.command == "snapshot":
         destination = output / "private" / "baseline-src"
         if destination.exists():

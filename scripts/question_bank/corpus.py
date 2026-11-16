@@ -15,6 +15,22 @@ W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 ANSWER = re.compile(r"(?:参考答案|答案[与及和]?解析|试题答案|答案要点|参考解答|^\s*答案\s*[:：]?\s*$)")
 
 
+def inferred_subject(filename: str, content: dict) -> str:
+    explicit = next((v for k, v in SUBJECTS.items() if k in filename), None)
+    if explicit:
+        return explicit
+    if re.search(r"(?<![A-Za-z])PEP(?![A-Za-z])|English", filename, re.I):
+        return "english"
+    heading = " ".join(p for p in content.get("paragraphs", [])[:8] if p.strip())[:350]
+    named = {v for k, v in SUBJECTS.items() if k in heading}
+    if len(named) == 1:
+        return named.pop()
+    text = content.get("stem_text", "")
+    if len(re.findall(r"\b[A-Za-z]{2,}\b", text)) >= 30 and re.search(r"listen|read|writing|English", text, re.I):
+        return "english"
+    return "unknown"
+
+
 def dump(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -69,6 +85,8 @@ def inventory(root: Path, output: Path) -> dict:
         try:
             if path.suffix.lower() == ".docx":
                 content = docx_content(path)
+                if record["subject"] == "unknown":
+                    record["subject"] = inferred_subject(path.name, content)
                 record.update({k: v for k, v in content.items() if k not in {"paragraphs", "stem_text", "answer_text"}})
                 dump(output / "private" / "documents" / f"{record['sha256']}.json", content)
             family = record.get("text_sha256") or record["sha256"]
@@ -127,3 +145,17 @@ def backfill(output: Path):
         added.extend(candidates[:min(12, missing * 2)])
     dump(output / "private" / "selected-documents.json", selected + added)
     return {"added": len(added), "selected_total": len(selected) + len(added)}
+
+
+def classify_cached(output: Path):
+    index_path = output / "private" / "inventory.json"
+    index = read(index_path)
+    changed = Counter()
+    for record in index["records"]:
+        path = output / "private" / "documents" / f"{record['sha256']}.json"
+        if record["subject"] == "unknown" and path.exists():
+            record["subject"] = inferred_subject(Path(record["path"]).name, read(path))
+            if record["subject"] != "unknown":
+                changed[record["subject"]] += 1
+    dump(index_path, index)
+    return dict(changed)
