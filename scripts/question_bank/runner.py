@@ -184,7 +184,8 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
     budget = Budget(output / "budget.sqlite3")
     split = case["split"]
     result_root = output / "results" if split == "development" else output / "private" / "holdout" / "results"
-    state_path = api_run / "private" / f"corpus-{case['id']}.json"
+    scope_name = f"corpus-{tag}-{case['id']}-{variant}-{cache}"
+    state_path = api_run / "private" / f"{scope_name}.json"
     with httpx.Client(base_url=base, timeout=240, trust_env=False) as client:
         verify_acceptance_api(client, api_run.name)
         health = client.get("/health")
@@ -203,10 +204,10 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
     # Real camera/setup preflight and pairing; no copied family or forged ticket.
     state = bootstrap(base, "http://127.0.0.1:5186/app/", api_run,
                       safe_image(output, case["images"]["hint"]),
-                      state_name=f"corpus-{case['id']}.json", setup_result_name=f"setup-{case['id']}.json",
+                      state_name=f"{scope_name}.json", setup_result_name=f"setup-{scope_name}.json",
                       grade=GRADE_LABELS[case["grade"]], evaluation_trace=f"setup:{case['id']}") if not state_path.exists() else read(state_path)
     if not state_path.exists():
-        original = api_run / f"corpus-{case['id']}.json"
+        original = api_run / f"{scope_name}.json"
         state_path.parent.mkdir(exist_ok=True)
         original.replace(state_path)
     if state.get("synthetic") is not True or state.get("run_id") != api_run.name or state.get("base_url") != base:
@@ -242,6 +243,7 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                   "input_sha256": hashlib.sha256(input_bytes).hexdigest(), "result_key": path.name,
                   "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
                   "backend_source_hash": actual_source,
+                  "state_file": str(state_path),
                   "completed": False, "response": {}}
         dump(path, record)
         start = time.monotonic()
@@ -298,34 +300,52 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
         from scripts.question_bank.seal import verify
         verify(output, tag, Path(__file__).resolve().parents[2] / "src" / "k12_server")
     base = output if split == "development" else output / "private" / "holdout"
-    results = []
-    for path in sorted((base / "results" / tag).glob("*.json"))[:limit]:
+    def review_one(path):
         record = read(path)
         if not record.get("completed"):
-            continue
+            return None
         destination = base / "reviews" / tag / path.name
         if destination.exists():
             assessment = apply_gates(record, read(destination))
             dump(destination, assessment)
-            results.append(assessment)
-            continue
-        if record.get("error"):
+            return assessment
+        from scripts.question_bank.gates import hard_checks
+        if record.get("error") or hard_checks(record):
             assessment = {"verdict": "fail", "reference_reliable": False, "scores": {},
-                          "findings": [{"severity": "major", "reason": record["error"]}], "mean_score": None}
+                          "findings": [], "mean_score": None,
+                          "unassessed": ["Content not scored because observable delivery gates failed."]}
         else:
             oracle = read(base / "private" / "oracles" / f"{record['case_id']}.json")
-            assessment = call_teacher(settings, Budget(output / "budget.sqlite3"), round_id,
-                f"review:{tag}:{record['case_id']}:{record['mode']}", RUBRIC,
-                {"grade": record["grade"], "subject": record["subject"], "mode": record["mode"],
-                 "reference": oracle, "observed": record["response"], "api_timings": record.get("timings"),
-                 "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
-                 safe_image(output, record["image"]))
-            assessment = assess_review(assessment, record["response"])
+            assessment = None
+            errors = []
+            for _attempt in range(2):
+                try:
+                    assessment = call_teacher(settings, Budget(output / "budget.sqlite3"), round_id,
+                        f"review:{tag}:{record['case_id']}:{record['mode']}", RUBRIC,
+                        {"grade": record["grade"], "subject": record["subject"], "mode": record["mode"],
+                         "reference": oracle, "observed": record["response"], "api_timings": record.get("timings"),
+                         "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
+                         safe_image(output, record["image"]))
+                    assessment = assess_review(assessment, record["response"])
+                    break
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                    errors.append({"attempt": _attempt + 1, "error": type(exc).__name__})
+                    dump(base / "private" / "review-errors" / tag / path.name, errors)
+            if assessment is None:
+                assessment = {"verdict": "needs_review", "reference_reliable": False, "scores": {},
+                              "findings": [], "mean_score": None, "review_service_errors": errors}
         assessment = apply_gates(record, assessment)
         assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"])
         dump(destination, assessment)
         if split == "development":
             distill(record, assessment, output / "distillation" / tag / path.name)
-        results.append(assessment)
-        print({"reviewed": len(results), "case": record["case_id"], "mode": record["mode"], "verdict": assessment["verdict"]}, flush=True)
+        return assessment
+    results = []
+    paths = sorted((base / "results" / tag).glob("*.json"))[:limit]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for future in as_completed([pool.submit(review_one, path) for path in paths]):
+            assessment = future.result()
+            if assessment:
+                results.append(assessment)
+                print({"reviewed": len(results), "case": assessment["case_id"], "mode": assessment["mode"], "verdict": assessment["verdict"]}, flush=True)
     return results

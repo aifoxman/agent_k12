@@ -224,11 +224,20 @@ def test_isolated_secret_survives_restart_without_sharing_family_credentials(tmp
     assert len(first) >= 48
 
 
+@pytest.mark.parametrize("label,expected", [("2.", "第2题"), ("3", "第3题"), ("二、（4）", "第二大题第4小题"),
+                                           ("左页第2大题第3小题", "左页第2大题第3小题"),
+                                           ("小明有12块糖，吃了3块，还剩多少块", None)])
+def test_reading_speaks_numbers_instead_of_repeating_a_full_stem_as_title(label, expected):
+    from k12_server.reading_review import spoken_question_label
+    assert spoken_question_label(label) == expected
+
+
 def test_physical_fallback_and_tts_calls_share_budget_and_worker_trace(monkeypatch, tmp_path):
     import httpx
     from types import SimpleNamespace
     from k12_server import ai, tts
     from scripts.question_bank.transport import TRACE, install
+    monkeypatch.setattr(ai, "_model_unavailable_until", {})
     attempts = []
     def post(url, **kwargs):
         attempts.append(kwargs["json"]["model"])

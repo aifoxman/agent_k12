@@ -94,7 +94,7 @@ def test_failed_recovery_clarifies_without_an_ordinary_third_location(api, monke
 def test_selected_crop_keeps_visual_beats_and_same_image_second_tier(api, monkeypatch):
     module, target = api[1], api[5]
     locations = []
-    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: locations.append(1) or deepcopy(target))
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: locations.append(_a) or deepcopy(target))
     monkeypatch.setattr(module, "analyze", lambda *_a, **_k: pytest.fail("selected crop fell into a plain-text response"))
     monkeypatch.setattr(module, "stream_teaching_beats", lambda *_a: iter([("beat", {
         "speech": "先把两个条件对应起来，因为它们说明同一个关系。",
@@ -107,6 +107,8 @@ def test_selected_crop_keeps_visual_beats_and_same_image_second_tier(api, monkey
     assert any(kind == "target" for kind, _ in frames)
     assert any(kind == "beat" for kind, _ in frames)
     assert first["continuation_available"] is True
+    assert locations[0][4] is False
+    assert "关联小问一起核对" in locations[0][2]
     monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: pytest.fail("continuation relocated the original crop"))
     second, _ = ask(api, previous_hint_id=first["id"], level=2,
                     question="请把这道题完整解答，包括答案与检查。")

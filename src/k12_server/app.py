@@ -2818,8 +2818,11 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 context = learning_context(session_id, task_id)
                 locator_settings = replace(settings, ai_model=preferences(
                     settings.database_path, family["id"])["locator_model"])
-                located = locate_question(locator_settings, image_bytes, question[:200], context,
-                                          spoken_reference or not bool(target))
+                reference = (("孩子已明确选定当前裁图中的完整题目；同题的关联小问一起核对，"
+                              "若包含不同的独立题则不能任选其一。" + question[:120])
+                             if selected_region else question[:200])
+                located = locate_question(locator_settings, image_bytes, reference, context,
+                                          False if selected_region else spoken_reference or not bool(target))
                 if not located["found"] and target:
                     located = locate_question(locator_settings, image_bytes, target[:100])
                 if located["found"]:
@@ -3253,7 +3256,11 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
                     "response": f"没能在当前纸面可靠找到{target[:50]}。如果有两页，请连同左页或右页一起说题号；也可读题目开头几个字，或在画面上圈画。"}
         focus_image, focus_region = focus_question_image(image_bytes, location["box"])
     else:
-        location = locate_question(locator_settings, image_bytes, question[:200], teaching_context, True)
+        reference = (("孩子已明确选定当前裁图中的完整题目；同题的关联小问一起核对，"
+                      "若包含不同的独立题则不能任选其一。" + question[:120])
+                     if selected_region else question[:200])
+        location = locate_question(locator_settings, image_bytes, reference, teaching_context,
+                                   not selected_region)
         if not location["found"]:
             return {"located": False, "target_box": None, "level": level,
                     "response": "我看了整页，还不能确定你指哪一题。请说题号、读一句题干，或在画面上圈画。"}

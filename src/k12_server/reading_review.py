@@ -8,6 +8,21 @@ from .ai import normalized_text_anchors, verify_teaching_anchors
 from .teaching_ink import normalized_teaching_beat
 
 
+def spoken_question_label(value: str) -> str | None:
+    """Speak printed numbering, never repeat a complete stem as a title."""
+    value = str(value).strip()
+    number = r"[0-9一二三四五六七八九十百]+"
+    single = re.fullmatch(rf"(?:第\s*)?[（(]?({number})\s*(?:[.．、)）]|题)?", value)
+    if single:
+        return f"第{single.group(1)}题"
+    nested = re.fullmatch(rf"({number})[.．、]\s*[（(]?({number})[)）]?", value)
+    if nested:
+        return f"第{nested.group(1)}大题第{nested.group(2)}小题"
+    if len(value) <= 30 and re.fullmatch(rf"(?:左页|右页)?第{number}(?:大题|题)(?:第{number}(?:小题|题|问))*", value):
+        return value
+    return None
+
+
 def reading_anchors_complete(reading: dict | None) -> bool:
     if not reading or not reading.get("conditions") or not reading.get("ask"):
         return False
@@ -61,15 +76,14 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     # the order of the same literal givens, never adds a condition or an answer.
     if not grounded(reading["ask"]):
         conditions.sort(key=lambda text: not grounded(text))
-    label = question["label"]
-    if re.fullmatch(r"\d+", label):
-        label = f"第{label}题"
+    label = spoken_question_label(question["label"])
+    lead = f"先看{label}，" if label else ""
     first, *remaining = conditions
-    speech = (f"先看{label}，题目告诉我们“{first}”。"
+    speech = (lead + f"题目告诉我们“{first}”。"
               + "".join(f"还有一个条件是“{text}”。" for text in remaining)
               + f"要我们求的是“{reading['ask']}”。")
     if grounded(reading["ask"]):
-        speech = (f"先看{label}，这道题要我们求的是“{reading['ask']}”。"
+        speech = (lead + f"这道题要我们求的是“{reading['ask']}”。"
                   + "".join(f"题目告诉我们“{text}”。" for text in conditions))
     beat = normalized_teaching_beat({
         "speech": speech, "step_id": 1, "step_title": "读题审题", "step_end": True,
