@@ -7890,17 +7890,20 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 </TeachingPaperFrame>
               )}
               {stage === 'active' &&
+                !teachingVisible &&
+                !cameraPreviewFullscreen &&
+                selectionImage && (
+                  <img
+                    className="selection-snapshot"
+                    src={selectionImage}
+                    alt="圈画时固定的作业画面"
+                  />
+                )}
+              {stage === 'active' &&
                 teachingMode !== 'lesson' &&
                 !teachingVisible &&
                 !cameraPreviewFullscreen && (
                   <>
-                    {selectionImage && (
-                      <img
-                        className="selection-snapshot"
-                        src={selectionImage}
-                        alt="圈画时固定的作业画面"
-                      />
-                    )}
                     <SelectionBox
                       selection={selection}
                       strokes={selectionStrokes}
