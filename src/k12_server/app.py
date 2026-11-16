@@ -3098,7 +3098,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                           image=fallback_image, claims=claims,
                           annotation_state=anchor_state,
                           prepared_target=target_item if not (
-                              candidate_id or selected_strokes is not None or selected_region) else None)
+                              candidate_id or selected_strokes is not None) else None)
             if result.get("located") and result.get("target_box") and not result.get("answer_assessment"):
                 beats = fallback_teaching_beats(result["response"], result["target_box"],
                                                 result.get("visual_cue"), result)
@@ -3174,7 +3174,7 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
     cached = continued
     if continued:
         pass
-    elif prepared_target is not None and not (candidate_id or selected_strokes is not None or selected_region):
+    elif prepared_target is not None and not (candidate_id or selected_strokes is not None):
         cached = prepared_target
     elif not (candidate_id or selected_strokes is not None or selected_region):
         try:
@@ -3192,7 +3192,7 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
     reviewing_old_question = False
     focus_image = image_bytes
     focus_region = [0, 0, 1, 1]
-    if prepared_target is not None and not (candidate_id or selected_strokes is not None or selected_region):
+    if prepared_target is not None and not (candidate_id or selected_strokes is not None):
         location = {**prepared_target}
         target_from_progress = spoken_reference or not bool(target)
         focus_image, focus_region = focus_question_image(image_bytes, location["box"])

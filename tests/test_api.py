@@ -807,8 +807,10 @@ def test_vague_hint_uses_recent_dialogue_and_keeps_single_question_grounded(monk
     assert locations[1][2] == "这题我还是看不懂" and locations[1][4] is True
     assert "先读出题目要求" in locations[1][3]
     assert module.one("SELECT response FROM hints WHERE question=?", ("这题我还是看不懂",))["response"].startswith("我先按")
-    assert ask("请帮我看这道题", selected_region=True)["target_box"] is None
-    assert len(locations) == 2
+    cropped = ask("请帮我看这道题", selected_region=True)
+    assert cropped["target_box"] == [.2, .3, .3, .2]
+    assert cropped["visual_beats"]
+    assert len(locations) == 3
 
 
 def test_family_flow_and_boundaries(monkeypatch, tmp_path):
@@ -1104,10 +1106,17 @@ def test_ephemeral_image_and_ai_failure(monkeypatch, tmp_path):
     assert second.status_code == 200
     assert images_seen[-1] == image
     assert client.get("/v1/families/dashboard", headers=p).json()["observations"][0]["visible_steps"] == "写出算式"
+    # A selected crop still needs a genuine image and a verified target identity.
+    hint_image = io.BytesIO()
+    Image.new("RGB", (600, 800), "white").save(hint_image, "JPEG")
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: {
+        "found": True, "box": [0, 0, 1, 1], "label": "当前题", "evidence": "纸面可见题干", "confidence": .9,
+    })
     hint = client.post("/v1/hints", data={"session_id": sid, "question": "这题怎么做", "level": 1,
                                           "selected_region": "true"},
-                       files={"image": ("crop.jpg", io.BytesIO(image), "image/jpeg")}, headers=c)
-    assert hint.json()["response"] == "先读题"
+                       files={"image": ("crop.jpg", io.BytesIO(hint_image.getvalue()), "image/jpeg")}, headers=c)
+    assert hint.json()["response"].endswith("先读题")
+    assert hint.json()["target_box"] == [0, 0, 1, 1]
     assert hint.json()["level"] == 1
     assert client.post(f"/v1/sessions/{sid}/corrections",
                        files={"image": ("page.jpg", io.BytesIO(image), "image/jpeg")}, headers=c).status_code == 403
