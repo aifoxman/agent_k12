@@ -698,6 +698,20 @@ def test_conflict_gate_respects_bounded_negation_without_proving_correctness(rea
     assert grounded_check_status(item, [.2, .2, .1, .1]) == expected
 
 
+@pytest.mark.parametrize("answer,reason,expected", [
+    ("答案选D。", "D项符合题意。A项有误，B项错误，C项应改正。", "looks_correct"),
+    ("选D", "D项有误，A项符合题意。", "unclear"),
+    ("D", "学生作答错误。A项错误。", "unclear"),
+    ("D", "A项说明学生答案错误。", "unclear"),
+    ("AD", "A项有误。", "unclear"),
+    ("D", "有误，应订正。", "unclear"),
+])
+def test_choice_contradiction_gate_keeps_the_judged_subject(answer, reason, expected):
+    item = {"status": "looks_correct", "confidence": .95, "answer": answer,
+            "evidence": "visible selection and complete options", "reason": reason}
+    assert grounded_check_status(item, [.2, .2, .1, .1])[0] == expected
+
+
 def test_blank_evidence_and_nonfinite_confidence_cannot_produce_a_check_mark():
     item = {"status": "looks_correct", "confidence": .95, "answer": "42",
             "evidence": "  ", "reason": "答案相符"}

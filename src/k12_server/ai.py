@@ -460,6 +460,20 @@ def grounded_check_status(item: dict, box: list[float] | None,
         )) else ""
     explanation = re.sub(r"(?:没有|未发现|未见|无|不存在)(?:计算|运算|书写|抄写|数数|计数|单位){0,2}(?:错误|差错)|不是错误|并未(?:算错|写错|答错)",
                          negated_error, explanation)
+    chosen = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(?:[）).。:：、，,；;\s]|$)", answer)
+    if status == "looks_correct" and chosen:
+        # Explaining why an UNSELECTED option is wrong does not contradict a
+        # correct selection. Retain unclear subjects and mixed/child verdicts.
+        clauses = re.split(r"[，,。；;！？!?\n]", explanation)
+        retained = []
+        for clause in clauses:
+            options = re.findall(r"(?<![A-Za-z])([A-H])(?=项|句|[、.．:：])|(?:选项|句子)([A-H])", clause)
+            labels = {a or b for a, b in options}
+            if (labels and chosen[1] not in labels
+                    and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
+                continue
+            retained.append(clause)
+        explanation = "。".join(retained)
     if status == "looks_correct" and any(word in explanation for word in (
         "写错", "算错", "答错", "错误", "有误", "不正确", "应改", "需要改",
         "应订正", "答案不符", "与题意不符", "不符合题目",
