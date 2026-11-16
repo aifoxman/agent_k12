@@ -229,12 +229,26 @@ def main() -> None:
     async def observe(request, call_next):
         evaluation_token = None
         if args.question_bank_budget:
-            from scripts.question_bank.transport import TRACE, valid_trace
+            from scripts.question_bank.transport import TRACE, logical_task, valid_trace
+            from scripts.question_bank.budget import Budget, BudgetExceeded
+            from fastapi.responses import JSONResponse
             try:
                 trace = valid_trace(request.headers.get("X-K12-Evaluation-Trace", "background"))
             except ValueError:
-                from fastapi.responses import JSONResponse
                 return JSONResponse({"detail": "Invalid evaluation trace"}, status_code=400)
+            if logical_task(request.method, request.url.path):
+                budget = Budget(args.question_bank_budget)
+                reservation = request.headers.get("X-K12-Evaluation-Task")
+                try:
+                    if reservation:
+                        if not reservation.isdecimal() or not budget.claim_task(int(reservation), args.question_bank_round, trace):
+                            return JSONResponse({"detail": "Invalid or already consumed evaluation task"}, status_code=400)
+                    else:
+                        trace = "ui:" + secrets.token_hex(12)
+                        identifier = budget.reserve(args.question_bank_round, "task", trace)
+                        budget.claim_task(identifier, args.question_bank_round, trace)
+                except BudgetExceeded:
+                    return JSONResponse({"detail": "Evaluation task budget exhausted"}, status_code=429)
             evaluation_token = TRACE.set(trace)
         started = time.monotonic()
         try:

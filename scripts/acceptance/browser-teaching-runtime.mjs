@@ -572,7 +572,7 @@ export async function runBrowserAcceptance(page, config, writeAllowed) {
       url.searchParams.set("mode", "child");
       await page.goto(url.href);
       await page
-        .getByRole("button", { name: "老师讲解", exact: true })
+        .getByRole("button", { name: /^(?:老师讲解|读题与思路|重听本题)$/ })
         .waitFor({ timeout: 60000 });
       await page.waitForFunction(
         () => document.querySelector(".camera-media video")?.videoWidth > 0,
@@ -635,7 +635,7 @@ export async function runBrowserAcceptance(page, config, writeAllowed) {
           await page.getByTitle("发送问题", { exact: true }).click();
         } else {
           await page
-            .getByRole("button", { name: "老师讲解", exact: true })
+            .getByRole("button", { name: /^(?:老师讲解|读题与思路)$/ })
             .click();
         }
         await page
@@ -777,7 +777,7 @@ export async function runBrowserAcceptance(page, config, writeAllowed) {
               .click();
           } else
             await page
-              .getByRole("button", { name: "老师讲解", exact: true })
+              .getByRole("button", { name: /^(?:老师讲解|读题与思路)$/ })
               .click();
           await page
             .locator(".teaching-step-controls")
@@ -897,7 +897,7 @@ export async function runBrowserAcceptance(page, config, writeAllowed) {
         intentionalColdReload = true;
         await page.reload();
         await page
-          .getByRole("button", { name: "老师讲解", exact: true })
+          .getByRole("button", { name: /^(?:老师讲解|读题与思路|重听本题)$/ })
           .waitFor({ timeout: 60000 });
         await page.waitForTimeout(config.dwell_ms);
         const state = await snapshot();

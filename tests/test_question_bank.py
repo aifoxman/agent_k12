@@ -93,6 +93,19 @@ def test_repeated_stream_metadata_does_not_double_count_tokens(tmp_path):
     assert summary["calls_with_usage_record"] == 1
 
 
+def test_client_task_reservation_is_bound_to_round_and_trace_and_single_use(tmp_path):
+    from scripts.question_bank.transport import logical_task
+    budget = Budget(tmp_path / "budget.sqlite3")
+    reservation = budget.reserve(1, "task", "case:hint1")
+    assert not budget.claim_task(reservation, 2, "case:hint1")
+    assert not budget.claim_task(reservation, 1, "other:hint1")
+    assert budget.claim_task(reservation, 1, "case:hint1")
+    assert not budget.claim_task(reservation, 1, "case:hint1")
+    assert logical_task("POST", "/v1/hints/stream")
+    assert logical_task("POST", "/v1/sessions/own/corrections")
+    assert not logical_task("POST", "/v1/sessions/own/page-prep")
+
+
 @pytest.mark.parametrize("expression,result", [("27+18", "45"), ("1/3+1/6", "1/2"), ("2**3", "8"), ("1.2*3", "18/5")])
 def test_exact_independent_arithmetic(expression, result):
     from fractions import Fraction

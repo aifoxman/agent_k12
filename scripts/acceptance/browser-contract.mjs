@@ -77,10 +77,13 @@ export function teachingWriteAllowed(method, pathname, sessionId) {
   )
     return true;
   const scope = "/v1/sessions/" + encodeURIComponent(sessionId);
+  const paperIndex = pathname.slice(scope.length);
   return (
     (method === "PATCH" && pathname === scope) ||
     (method === "POST" &&
-      [scope + "/timer/events", scope + "/page-prep"].includes(pathname))
+      ([scope + "/timer/events", scope + "/page-prep"].includes(pathname) ||
+        (pathname.startsWith(scope + "/") &&
+          /^\/page-prep\/[A-Za-z0-9_-]{1,64}\/(?:stream|anchors)$/.test(paperIndex))))
   );
 }
 

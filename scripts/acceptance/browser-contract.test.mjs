@@ -10,6 +10,13 @@ import {
   validateBrowserConfig,
 } from "./browser-contract.mjs";
 
+test("teaching permits its own incremental paper index but cannot post to another session", () => {
+  assert.equal(teachingWriteAllowed("POST", "/v1/sessions/own/page-prep/frame123/stream", "own"), true);
+  assert.equal(teachingWriteAllowed("POST", "/v1/sessions/own/page-prep/frame123/anchors", "own"), true);
+  assert.equal(teachingWriteAllowed("POST", "/v1/sessions/other/page-prep/frame123/stream", "own"), false);
+  assert.equal(teachingWriteAllowed("POST", "/v1/sessions/own/page-prep/frame123/delete", "own"), false);
+});
+
 test("task cycle scopes real writes to its own tasks and never grades or changes another family", () => {
   const allowed = (method, path) =>
     taskCycleWriteAllowed(method, path, "own-session", ["own-task"]);

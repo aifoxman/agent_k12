@@ -116,6 +116,8 @@ Android 构建需 JDK 17、Android SDK Platform 36 和 Build Tools 35.0.0，设�
 
 ## 自动验收与复验
 
+本地一至六年级题库的模拟拍摄、独立教师评审、调用限额和封存题复验见[题库双角色优化说明](docs/question-bank-optimization.md)。参考答案与被测后端隔离；评审结果用于通用程序改进及候选蒸馏数据，不代表已完成模型权重训练。
+
 按[自动验收说明](docs/auto-acceptance.md)启动隔离 API 和前端后，可运行通用模型／旧浏览器冒烟入口：
 
 ```powershell

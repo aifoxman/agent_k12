@@ -17,6 +17,10 @@ class Budget:
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS reservations (id INTEGER PRIMARY KEY, round INTEGER, kind TEXT, trace TEXT, created REAL)")
             db.execute("CREATE TABLE IF NOT EXISTS usage (reservation INTEGER PRIMARY KEY, model TEXT, input_tokens INTEGER, output_tokens INTEGER)")
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(reservations)")}
+            if "consumed" not in columns:
+                db.execute("ALTER TABLE reservations ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0")
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=30)
@@ -33,6 +37,14 @@ class Budget:
                 raise BudgetExceeded(f"{kind} budget exhausted for round {round_id}")
             cursor = db.execute("INSERT INTO reservations(round,kind,trace,created) VALUES(?,?,?,?)", (round_id, kind, trace[:128], time.time()))
             return cursor.lastrowid
+
+    def claim_task(self, reservation: int, round_id: int, trace: str) -> bool:
+        """A client reservation may authorize exactly one logical API attempt."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cursor = db.execute("UPDATE reservations SET consumed=1 WHERE id=? AND round=? AND kind='task' AND trace=? AND consumed=0",
+                                (reservation, round_id, trace))
+            return cursor.rowcount == 1
 
     def record(self, reservation: int, model: str, usage: dict | None):
         usage = usage or {}

@@ -111,3 +111,8 @@ def valid_trace(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
         raise ValueError("Invalid evaluation trace")
     return value
+
+
+def logical_task(method: str, path: str) -> bool:
+    return method == "POST" and (path in {"/v1/hints", "/v1/hints/stream"}
+                                 or re.fullmatch(r"/v1/sessions/[A-Za-z0-9_-]+/corrections", path) is not None)

@@ -120,8 +120,15 @@ def prewarm(client, session, headers, image):
         for name, data in events(response.iter_lines()):
             if name in {"index", "done"}:
                 snapshot = data
+                questions = data.get("questions") or []
+                if (len(questions) == 1 and questions[0].get("reading_ready")
+                        and (questions[0].get("reading") or {}).get("page")):
+                    break  # Match a child asking once scan-time reading is ready.
     if not snapshot or snapshot.get("frame_sha256") != hashlib.sha256(image).hexdigest():
         raise ValueError("Prepared index does not match this exact simulated frame")
+    questions = snapshot.get("questions") or []
+    if len(questions) != 1 or not questions[0].get("reading_ready") or not (questions[0].get("reading") or {}).get("page"):
+        raise ValueError("A genuine warm reading cache was not available")
     return prepared_form(snapshot), {"preparation_ms": round((time.monotonic() - start) * 1000),
                                       "index": snapshot}
 
@@ -221,7 +228,7 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                 if mode == "hint1": previous = record.get("response", {}).get("id")
                 results.append(record)
                 continue
-        budget.reserve(round_id, "task", f"{tag}:{identifier}")
+        task_reservation = budget.reserve(round_id, "task", f"{tag}:{identifier}")
         trace = f"{tag}:{identifier}"
         image_key = variant if mode.startswith("hint") and variant != "clean" else "hint" if mode.startswith("hint") else mode
         image_path = safe_image(output, case["images"][image_key])
@@ -240,7 +247,7 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
         start = time.monotonic()
         try:
             with httpx.Client(base_url=base, timeout=240, trust_env=False) as client:
-                headers = {**child, "X-K12-Evaluation-Trace": trace}
+                headers = {**child, "X-K12-Evaluation-Trace": trace, "X-K12-Evaluation-Task": str(task_reservation)}
                 if mode in {"hint1", "hint2"}:
                     if cache == "warm" and mode == "hint1":
                         prepared, preparation = prewarm(client, state["session_id"], {**headers, "X-K12-Evaluation-Trace": f"prep:{trace}"}, input_bytes)

@@ -185,10 +185,12 @@ def make_manifest(output: Path, font: str):
         raise ValueError("Manifest is immutable; choose a new run rather than changing its split")
     specs = [read(p) for p in sorted((output / "private" / "specs").glob("*.json"))]
     accepted = []
+    seen_path = output / "private" / "seen-development.json"
+    seen = set(read(seen_path)) if seen_path.exists() else set()
     for (subject, grade), count in quotas().items():
         candidates = [s for s in specs if s.get("accepted") and s.get("independent_reference_check")
                       and s.get("subject") == subject and s.get("grade") == grade]
-        accepted.extend(sorted(candidates, key=lambda s: s["case_id"])[:count])
+        accepted.extend(sorted(candidates, key=lambda s: (s["case_id"] not in seen, s["case_id"]))[:count])
     groups = group_cases(accepted)
     # Round-robin strata before deterministic group selection preserves grade/subject breadth.
     strata = {}
@@ -203,8 +205,6 @@ def make_manifest(output: Path, font: str):
     total = sum(len(g) for g in ordered)
     desired = min(18, max(1, round(total * .3)))
     holdout, development = [], []
-    seen_path = output / "private" / "seen-development.json"
-    seen = set(read(seen_path)) if seen_path.exists() else set()
     for group in ordered:
         if not any(s["case_id"] in seen for s in group) and len(holdout) < desired and len(group) <= desired - len(holdout):
             holdout.extend(group)
