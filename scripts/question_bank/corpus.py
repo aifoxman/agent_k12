@@ -86,14 +86,18 @@ def inventory(root: Path, output: Path) -> dict:
     return value
 
 
-def choose_documents(index: dict) -> list[dict]:
-    """60 source groups: math 30, Chinese 12, English 12, science 6."""
+def quotas():
     quotas = {("math", g): 5 for g in range(1, 7)}
     quotas.update({("chinese", g): 2 for g in range(1, 7)})
     quotas.update({("english", g): 3 for g in range(3, 7)})
     quotas.update({("science", g): (2 if g == 6 else 1) for g in range(2, 7)})
+    return quotas
+
+
+def choose_documents(index: dict) -> list[dict]:
+    """60 source groups: math 30, Chinese 12, English 12, science 6."""
     chosen = []
-    for (subject, grade), count in quotas.items():
+    for (subject, grade), count in quotas().items():
         candidates = [r for r in index["records"] if r["subject"] == subject and r["grade"] == grade
                       and r["state"] == "indexed" and not r.get("duplicate_of")
                       and r["extension"] == ".docx" and r.get("answer_boundary") is not None]
@@ -101,3 +105,25 @@ def choose_documents(index: dict) -> list[dict]:
         candidates.sort(key=lambda r: hashlib.sha256(("k12-corpus-v1:" + r["sha256"]).encode()).hexdigest())
         chosen.extend(candidates[:count])
     return chosen
+
+
+def backfill(output: Path):
+    if (output / "manifest.json").exists():
+        raise ValueError("Cannot change a sealed corpus")
+    index = read(output / "private" / "inventory.json")
+    selected = read(output / "private" / "selected-documents.json")
+    used = {r["sha256"] for r in selected}
+    specs = [read(p) for p in (output / "private" / "specs").glob("*.json")]
+    accepted = Counter((s.get("subject"), s.get("grade")) for s in specs
+                       if s.get("accepted") and s.get("independent_reference_check") is True)
+    added = []
+    for key, desired in quotas().items():
+        missing = max(0, desired - accepted[key])
+        candidates = [r for r in index["records"] if (r["subject"], r["grade"]) == key
+                      and r["sha256"] not in used and r["state"] == "indexed"
+                      and r["extension"] == ".docx" and r.get("answer_boundary") is not None
+                      and not r.get("duplicate_of")]
+        candidates.sort(key=lambda r: hashlib.sha256(("k12-corpus-v1:" + r["sha256"]).encode()).hexdigest())
+        added.extend(candidates[:min(12, missing * 2)])
+    dump(output / "private" / "selected-documents.json", selected + added)
+    return {"added": len(added), "selected_total": len(selected) + len(added)}

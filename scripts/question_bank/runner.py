@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import subprocess
 import time
 import uuid
@@ -14,6 +16,7 @@ import httpx
 from scripts.acceptance.bootstrap import bootstrap, verify_acceptance_api
 from scripts.question_bank.budget import Budget
 from scripts.question_bank.corpus import dump, read
+from scripts.question_bank.gates import apply as apply_gates
 from scripts.question_bank.simulation import safe_image
 from scripts.question_bank.teacher import RUBRIC, assess_review, call_teacher, distill
 
@@ -28,6 +31,12 @@ def safe_base(value: str) -> str:
             or parsed.path not in {"", "/"}):
         raise ValueError("Only a dedicated loopback acceptance API is allowed")
     return value.rstrip("/")
+
+
+def valid_tag(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value):
+        raise ValueError("Use a bounded artifact tag without path separators")
+    return value
 
 
 def forms(mode: str, session: str, previous_id: str | None = None) -> dict:
@@ -77,7 +86,7 @@ def speech(base: str, headers: dict, text: str, destination: Path, start: float)
                            json={"model": "k12-tts", "voice": "teacher-warm-female", "input": text[:180],
                                  "response_format": "pcm", "stream_format": "audio", "speed": 1}) as response:
             response.raise_for_status()
-            for chunk in response.iter_bytes(4096):
+            for chunk in response.iter_bytes():
                 if chunk:
                     timings.setdefault("first_audio_packet_ms", round((time.monotonic() - start) * 1000))
                     chunks.append(chunk)
@@ -88,11 +97,44 @@ def speech(base: str, headers: dict, text: str, destination: Path, start: float)
     return {**timings, "pcm_bytes": sum(map(len, chunks)), "human_listening": False}
 
 
-def hint(client, mode, session, headers, image, previous=None, *, audio_path=None):
+def prepared_form(index: dict) -> dict:
+    questions = index.get("questions") or []
+    if len(questions) != 1:
+        raise ValueError("Warm selection must be an unambiguous backend-indexed single question")
+    question = questions[0]
+    x, y, width, height = question["box"]
+    return {"prepared_question_id": question["id"],
+            "prepared_geometry": json.dumps({"page_id": index["page_id"], "frame_sha256": index["frame_sha256"],
+                                               "matrix": [1, 0, 0, 0, 1, 0, 0, 0, 1]}),
+            "selected_strokes": json.dumps([[[x + width * .15, y + height * .5], [x + width * .75, y + height * .5]]])}
+
+
+def prewarm(client, session, headers, image):
+    start = time.monotonic()
+    prepared = client.post(f"/v1/sessions/{session}/page-prep", headers=headers,
+                           files={"image": ("simulated.jpg", image, "image/jpeg")})
+    prepared.raise_for_status()
+    snapshot = None
+    with client.stream("POST", f"/v1/sessions/{session}/page-prep/{prepared.json()['page_id']}/stream", headers=headers) as response:
+        response.raise_for_status()
+        for name, data in events(response.iter_lines()):
+            if name in {"index", "done"}:
+                snapshot = data
+    if not snapshot or snapshot.get("frame_sha256") != hashlib.sha256(image).hexdigest():
+        raise ValueError("Prepared index does not match this exact simulated frame")
+    return prepared_form(snapshot), {"preparation_ms": round((time.monotonic() - start) * 1000),
+                                      "index": snapshot}
+
+
+def hint(client, mode, session, headers, image, previous=None, *, audio_path=None, prepared=None):
     start, final, timeline, timings = time.monotonic(), None, [], {}
     audio_future = None
     with ThreadPoolExecutor(max_workers=1) as audio_pool:
-        with client.stream("POST", "/v1/hints/stream", headers=headers, data=forms(mode, session, previous),
+        form = forms(mode, session, previous)
+        if prepared and mode == "hint1":
+            form.pop("selected_region", None)
+            form.update(prepared)
+        with client.stream("POST", "/v1/hints/stream", headers=headers, data=form,
                            files={"image": ("simulated.jpg", image, "image/jpeg")}) as response:
             response.raise_for_status()
             for name, payload in events(response.iter_lines()):
@@ -129,8 +171,9 @@ def manifest(output: Path, split: str):
 
 
 def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, tag: str,
-             modes: list[str], variant="clean", audio=False):
+             modes: list[str], variant="clean", audio=False, cache="cold"):
     base = safe_base(base)
+    valid_tag(tag)
     budget = Budget(output / "budget.sqlite3")
     split = case["split"]
     result_root = output / "results" if split == "development" else output / "private" / "holdout" / "results"
@@ -159,10 +202,10 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
         with httpx.Client(base_url=base, timeout=20, trust_env=False) as audio_client:
             permission = audio_client.patch("/v1/families/voice-preferences", headers=parent, json={"enabled": True})
             permission.raise_for_status()
-    previous = None
+    previous, prepared, preparation = None, None, None
     results = []
     for mode in modes:
-        identifier = f"{case['id']}.{mode}.{variant}"
+        identifier = f"{case['id']}.{mode}.{variant}" + (".warm" if cache == "warm" else "")
         path = result_root / tag / f"{identifier}.json"
         if path.exists():
             record = read(path)
@@ -174,9 +217,14 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
         trace = f"{tag}:{identifier}"
         image_key = variant if mode.startswith("hint") and variant != "clean" else "hint" if mode.startswith("hint") else mode
         image_path = safe_image(output, case["images"][image_key])
+        input_bytes = image_path.read_bytes()
+        input_copy = path.with_suffix(".input.jpg")
+        input_copy.parent.mkdir(parents=True, exist_ok=True)
+        input_copy.write_bytes(input_bytes)
         record = {"case_id": case["id"], "mode": mode, "variant": variant, "tag": tag, "trace": trace,
-                  "split": split, "grade": case["grade"], "subject": case["subject"], "type": case["type"],
-                  "source_sha256": case["source_sha256"], "image": case["images"][image_key],
+                  "split": split, "grade": case["grade"], "subject": case["subject"], "type": case["type"], "cache": cache,
+                  "source_sha256": case["source_sha256"], "image": input_copy.relative_to(output).as_posix(),
+                  "input_sha256": hashlib.sha256(input_bytes).hexdigest(), "result_key": path.name,
                   "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
                   "backend_source_hash": actual_source,
                   "completed": False, "response": {}}
@@ -186,8 +234,12 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
             with httpx.Client(base_url=base, timeout=240, trust_env=False) as client:
                 headers = {**child, "X-K12-Evaluation-Trace": trace}
                 if mode in {"hint1", "hint2"}:
+                    if cache == "warm" and mode == "hint1":
+                        prepared, preparation = prewarm(client, state["session_id"], {**headers, "X-K12-Evaluation-Trace": f"prep:{trace}"}, input_bytes)
+                        record["preparation"] = preparation
                     response, timeline, timings = hint(client, mode, state["session_id"], headers,
-                        image_path.read_bytes(), previous, audio_path=path.with_suffix(".pcm") if audio and mode == "hint1" else None)
+                        input_bytes, previous, audio_path=path.with_suffix(".pcm") if audio and mode == "hint1" else None,
+                        prepared=prepared)
                     record.update(response=response, events=timeline, timings=timings)
                     if mode == "hint1": previous = response.get("id")
                     if response.get("delivery_complete") is False or not response.get("located"):
@@ -197,7 +249,7 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                     approval.raise_for_status()
                     response = client.post(f"/v1/sessions/{state['session_id']}/corrections", headers=headers,
                         data={"subject_label": SUBJECT_LABELS[case["subject"]]},
-                        files={"image": ("simulated.jpg", image_path.read_bytes(), "image/jpeg")})
+                        files={"image": ("simulated.jpg", input_bytes, "image/jpeg")})
                     response.raise_for_status()
                     record["response"] = response.json()
         except Exception as exc:
@@ -212,20 +264,21 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
 
 
 def run(output: Path, base: str, api_run: Path, round_id: int, tag: str, *, split="development",
-        modes=None, selected=None, limit=60, variant="clean", audio=False):
+        modes=None, selected=None, limit=60, variant="clean", audio=False, cache="cold"):
     cases = [c for c in manifest(output, split)["cases"] if not selected or c["id"] in selected][:limit]
     if not cases:
         raise ValueError("No cases selected")
     modes = modes or ["hint1", "hint2", "correct", "wrong", "blank"]
     results = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(run_case, output, base, api_run, case, round_id, tag, modes, variant, audio) for case in cases]
+        futures = [pool.submit(run_case, output, base, api_run, case, round_id, tag, modes, variant, audio, cache) for case in cases]
         for future in as_completed(futures):
             results.extend(future.result())
     return results
 
 
 def review(output: Path, settings, round_id: int, tag: str, *, split="development", limit=300):
+    valid_tag(tag)
     if split == "holdout":
         from scripts.question_bank.seal import verify
         verify(output, tag, Path(__file__).resolve().parents[2] / "src" / "k12_server")
@@ -233,9 +286,13 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
     results = []
     for path in sorted((base / "results" / tag).glob("*.json"))[:limit]:
         record = read(path)
+        if not record.get("completed"):
+            continue
         destination = base / "reviews" / tag / path.name
         if destination.exists():
-            results.append(read(destination))
+            assessment = apply_gates(record, read(destination))
+            dump(destination, assessment)
+            results.append(assessment)
             continue
         if record.get("error"):
             assessment = {"verdict": "fail", "reference_reliable": False, "scores": {},
@@ -249,6 +306,7 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                  "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
                  safe_image(output, record["image"]))
             assessment = assess_review(assessment, record["response"])
+        assessment = apply_gates(record, assessment)
         assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"])
         dump(destination, assessment)
         if split == "development":

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from scripts.question_bank.budget import Budget
-from scripts.question_bank.corpus import choose_documents, dump, inventory, read
+from scripts.question_bank.corpus import backfill, choose_documents, dump, inventory, read
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,8 +31,9 @@ def main():
     commands.add_parser("snapshot")
     commands.add_parser("freeze-final")
     commands.add_parser("export")
+    commands.add_parser("backfill")
     prepare = commands.add_parser("prepare")
-    prepare.add_argument("--limit", type=int, default=60)
+    prepare.add_argument("--limit", type=int, default=1000)
     seal = commands.add_parser("seal")
     seal.add_argument("--font", default="C:/Windows/Fonts/msyh.ttc")
     for command in ("run", "review"):
@@ -48,6 +49,7 @@ def main():
             sub.add_argument("--modes", nargs="+", choices=("hint1", "hint2", "correct", "wrong", "blank"))
             sub.add_argument("--variant", choices=("clean", "rotation", "perspective", "shadow", "blur", "jpeg", "movement"), default="clean")
             sub.add_argument("--audio", action="store_true")
+            sub.add_argument("--cache", choices=("cold", "warm"), default="cold")
     summary = commands.add_parser("report")
     summary.add_argument("--tag", required=True)
     summary.add_argument("--split", choices=("development", "holdout"), default="development")
@@ -65,6 +67,8 @@ def main():
         records = choose_documents(value)
         dump(output / "private" / "selected-documents.json", records)
         print(json.dumps({"files": len(value["records"]), "selected": len(records), "errors": len(value["errors"])}))
+    elif args.command == "backfill":
+        print(json.dumps(backfill(output)))
     elif args.command == "snapshot":
         destination = output / "private" / "baseline-src"
         if destination.exists():
@@ -95,7 +99,7 @@ def main():
     elif args.command == "run":
         from scripts.question_bank.runner import run
         run(output, args.base_url, args.api_run, args.round, args.tag, split=args.split,
-            modes=args.modes, selected=args.case, limit=args.limit, variant=args.variant, audio=args.audio)
+            modes=args.modes, selected=args.case, limit=args.limit, variant=args.variant, audio=args.audio, cache=args.cache)
     elif args.command == "review":
         from scripts.question_bank.runner import review
         from scripts.question_bank.teacher import load_settings

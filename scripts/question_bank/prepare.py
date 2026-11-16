@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 from scripts.question_bank.budget import Budget, BudgetExceeded
-from scripts.question_bank.corpus import dump, read
+from scripts.question_bank.corpus import dump, quotas, read
 from scripts.question_bank.simulation import student_paper
 from scripts.question_bank.teacher import BLIND_ORACLE, ORACLE, REFERENCE_CHECK, call_teacher, normalize, validate_oracle
 
@@ -38,7 +38,7 @@ def prepare_document(record, output: Path, settings, round_id=1):
     identifier = record["sha256"][:20]
     spec_path = output / "private" / "specs" / f"{identifier}.json"
     cached_spec = read(spec_path) if spec_path.exists() else None
-    if cached_spec and cached_spec.get("validation_version") == 3:
+    if cached_spec and cached_spec.get("validation_version") == 4:
         return cached_spec
     content = read(output / "private" / "documents" / f"{record['sha256']}.json")
     pdf = output / "private" / "pdf" / f"{record['sha256']}.pdf"
@@ -74,7 +74,9 @@ def prepare_document(record, output: Path, settings, round_id=1):
             full_rects = quote_regions(page, spec["question_text"])
             if full_rects:
                 text_rect = min(full_rects, key=lambda r: abs(r.y0 - rect.y0))
-                if (rect & text_rect).get_area() > 0:
+                if not re.search(r"下图|如图|图中|图形|看图|观察图", spec["question_text"]):
+                    rect = (text_rect + (-5, -5, 5, 8)) & page_rect
+                elif (rect & text_rect).get_area() > 0:
                     rect |= text_rect
                     rect = (rect + (-3, -3, 3, 3)) & page_rect
             if not quote_rects or not any(rect.contains(r) for r in quote_rects):
@@ -114,12 +116,12 @@ def prepare_document(record, output: Path, settings, round_id=1):
                                 "box": [(match.x0 - rect.x0) / rect.width, (match.y0 - rect.y0) / rect.height,
                                         match.width / rect.width, match.height / rect.height]})
         spec.setdefault("independent_reference_check", False)
-        spec["validation_version"] = 3
+        spec["validation_version"] = 4
         dump(spec_path, spec)
         return spec
 
 
-def prepare_all(output: Path, settings, *, limit=60):
+def prepare_all(output: Path, settings, *, limit=1000):
     records = read(output / "private" / "selected-documents.json")[:limit]
     results = []
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -165,7 +167,12 @@ def make_manifest(output: Path, font: str):
     if (output / "manifest.json").exists():
         raise ValueError("Manifest is immutable; choose a new run rather than changing its split")
     specs = [read(p) for p in sorted((output / "private" / "specs").glob("*.json"))]
-    groups = group_cases([s for s in specs if s.get("accepted")])
+    accepted = []
+    for (subject, grade), count in quotas().items():
+        candidates = [s for s in specs if s.get("accepted") and s.get("independent_reference_check")
+                      and s.get("subject") == subject and s.get("grade") == grade]
+        accepted.extend(sorted(candidates, key=lambda s: s["case_id"])[:count])
+    groups = group_cases(accepted)
     # Round-robin strata before deterministic group selection preserves grade/subject breadth.
     strata = {}
     for group in groups:

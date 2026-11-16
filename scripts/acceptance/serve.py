@@ -48,6 +48,9 @@ def main() -> None:
             parser.error("Frozen backend source must be inside output/acceptance")
         sys.path.insert(0, str(source))
     if args.question_bank_budget:
+        budget_path = args.question_bank_budget.resolve()
+        if not budget_path.is_relative_to(allowed) or budget_path == database_for_run(directory):
+            parser.error("Question-bank budget must be a separate database inside output/acceptance")
         sys.path.insert(0, str(ROOT))
         from scripts.question_bank.transport import install
         install(args.question_bank_budget, args.question_bank_round, directory / "upstream.jsonl")

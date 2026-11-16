@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.question_bank.budget import Budget, BudgetExceeded
 from scripts.question_bank.corpus import docx_content, inventory
 from scripts.question_bank.prepare import group_cases
-from scripts.question_bank.runner import events, forms, meaningful, safe_base
+from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
 from scripts.question_bank.simulation import percentile, safe_image
 from scripts.question_bank.teacher import arithmetic, assess_review, distill, validate_oracle
 
@@ -49,6 +49,19 @@ def test_reference_fields_cannot_enter_production_form():
 def test_no_family_or_remote_server_can_be_evaluated(url):
     with pytest.raises(ValueError):
         safe_base(url)
+
+
+def test_warm_selection_uses_only_the_live_backend_index_not_oracle_geometry():
+    question = {"id": "index-id", "box": [.1, .2, .6, .3]}
+    index = {"page_id": "page", "frame_sha256": "a" * 64, "questions": [question]}
+    form = prepared_form(index)
+    assert form["prepared_question_id"] == "index-id"
+    assert json.loads(form["prepared_geometry"])["frame_sha256"] == "a" * 64
+    assert set(form) == {"prepared_question_id", "prepared_geometry", "selected_strokes"}
+    with pytest.raises(ValueError):
+        prepared_form({**index, "questions": [question, question]})
+    with pytest.raises(ValueError):
+        valid_tag("../../data")
 
 
 def test_atomic_budget_cannot_overrun_under_concurrency(tmp_path):
@@ -142,6 +155,16 @@ def test_holdout_never_enters_distillation(tmp_path):
     record = {"case_id": "x", "split": "holdout", "response": {"response": "teacher"}}
     distill(record, {"verdict": "pass", "reference_reliable": True}, path)
     assert json.loads(path.read_text(encoding="utf-8"))["eligible_for_training"] is False
+
+
+def test_teacher_cannot_pass_missing_visuals_or_invented_blank_answers():
+    from scripts.question_bank.gates import apply
+    assessed = apply({"mode": "hint1", "response": {"located": True, "visual_beats": [], "explanation_status": "ready", "continuation_available": False}},
+                     {"verdict": "pass", "findings": []})
+    assert assessed["verdict"] == "fail" and len(assessed["deterministic_checks"]) == 2
+    assessed = apply({"mode": "blank", "response": {"checks": [{"answer_state": "written", "answer": "12"}]}},
+                     {"verdict": "pass", "findings": []})
+    assert assessed["verdict"] == "fail" and assessed["findings"][0]["severity"] == "critical"
 
 
 def test_fixture_path_cannot_escape_run(tmp_path):

@@ -10,12 +10,15 @@ from scripts.question_bank.simulation import percentile
 
 
 def report(output: Path, tag: str, split="development"):
+    from scripts.question_bank.runner import valid_tag
+    valid_tag(tag)
     base = output if split == "development" else output / "private" / "holdout"
-    records = [read(p) for p in (base / "results" / tag).glob("*.json")]
+    all_records = [read(p) for p in (base / "results" / tag).glob("*.json")]
+    records = [record for record in all_records if record.get("completed")]
     reviews = {p.name: read(p) for p in (base / "reviews" / tag).glob("*.json")}
     groups, timing = defaultdict(Counter), defaultdict(list)
     for record in records:
-        filename = f"{record['case_id']}.{record['mode']}.{record['variant']}.json"
+        filename = record.get("result_key") or f"{record['case_id']}.{record['mode']}.{record['variant']}.json"
         review = reviews.get(filename, {})
         status = review.get("verdict", "unreviewed")
         for key in ("all", f"grade:{record['grade']}", f"subject:{record['subject']}", f"mode:{record['mode']}", f"variant:{record['variant']}", f"type:{record.get('type')}"):
@@ -26,8 +29,9 @@ def report(output: Path, tag: str, split="development"):
         timing[f"{record['mode']}:total_ms"].append(record["total_ms"])
         for key, value in record.get("timings", {}).items():
             if key.endswith("_ms") and isinstance(value, int | float):
-                timing[f"{record['mode']}:{record['variant']}:{key}"].append(value)
+                timing[f"{record['mode']}:{record['variant']}:{record.get('cache', 'cold')}:{key}"].append(value)
     result = {"tag": tag, "split": split, "simulated_camera": True, "real_handwriting": False,
+              "running_tasks": sum(not r.get("completed") for r in all_records),
               "groups": {key: dict(counts) for key, counts in groups.items()},
               "timings": {key: {"n": len(values), "median": percentile(values, .5), "p95": percentile(values, .95)} for key, values in timing.items()},
               "budget": Budget(output / "budget.sqlite3").summary(),
