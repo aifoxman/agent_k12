@@ -213,6 +213,14 @@ def test_waiting_status_and_target_box_are_not_effective_teaching():
     assert timing == {"first_effective_mark_ms": 200, "first_thinking_ms": 200}
 
 
+def test_literal_reading_draft_is_not_reported_as_a_ready_solution_method():
+    timing = {}
+    meaningful({"phase": "reading", "scratch": [{"text": "已知条件与所求"}]}, timing, 150)
+    assert timing == {"first_reading_draft_ms": 150}
+    meaningful({"phase": "explanation", "scratch": [{"text": "可核查的关系和方法"}]}, timing, 2000)
+    assert timing["first_thinking_ms"] == 2000
+
+
 def test_unterminated_sse_cannot_fake_a_done():
     assert list(events(["event: done", 'data: {"located": true}'])) == []
     assert list(events(["event: beat", 'data: {"speech":"看条件"}', ""])) == [("beat", {"speech": "看条件"})]

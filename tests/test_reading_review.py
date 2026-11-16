@@ -31,7 +31,10 @@ def test_reading_is_available_without_any_solution_and_does_not_introduce_an_ans
     assert review["phase"] == "reading" and review["reply_mode"] == "none"
     assert "前面有5人" in review["speech"] and "后面有6人" in review["speech"]
     assert "多少人" in review["speech"] and "12" not in review["speech"]
-    assert review["scratch"] == []
+    assert [item["text"] for item in review["scratch"]] == [
+        "已知：前面有5人", "已知：后面有6人", "所求：这一队一共有多少人"]
+    assert all(item["draft_kind"] == "reading" and item["preview"] for item in review["scratch"])
+    assert "12" not in json.dumps(review["scratch"], ensure_ascii=False)
     assert review["reading_key"] == reading_review(item, paper())["reading_key"]
 
 

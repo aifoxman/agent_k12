@@ -93,6 +93,15 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     }, [0, 0, 1, 1], question["box"], "", anchors, True)
     if not beat:
         return None
+    # A teacher first organizes the givens and the question. These literal
+    # reading notes can be visible while the independent solution is pending;
+    # they are never represented as a computed method or a completed solution.
+    beat["scratch"] = [
+        {"kind": "text", "role": "prose", "x": 5, "y": 5 + index * 15,
+         "text": "已知：" + text, "preview": True, "draft_kind": "reading"}
+        for index, text in enumerate(conditions)
+    ] + [{"kind": "text", "role": "prose", "x": 5, "y": 5 + len(conditions) * 15,
+          "text": "所求：" + reading["ask"], "preview": True, "draft_kind": "reading"}]
     identity = json.dumps([question.get("id"), question["label"], question["evidence"],
                            reading["conditions"], reading["ask"]], ensure_ascii=False)
     beat.update(phase="reading", reading_key=hashlib.sha256(identity.encode()).hexdigest())

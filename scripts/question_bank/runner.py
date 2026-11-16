@@ -74,7 +74,7 @@ def meaningful(beat: dict, timings: dict, elapsed: float):
     if any(m.get("text") and m.get("kind") not in {"locator", "question"} for m in beat.get("page", []) if isinstance(m, dict)):
         timings.setdefault("first_effective_mark_ms", elapsed)
     if any(m.get("text") for m in beat.get("scratch", []) if isinstance(m, dict)):
-        timings.setdefault("first_thinking_ms", elapsed)
+        timings.setdefault("first_reading_draft_ms" if beat.get("phase") == "reading" else "first_thinking_ms", elapsed)
     if beat.get("speech"):
         timings.setdefault("first_speech_text_ms", elapsed)
 
