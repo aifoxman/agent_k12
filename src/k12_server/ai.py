@@ -458,7 +458,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
         return match.group() if any(word in prefix for word in (
             "并非", "不是", "不能", "未必", "无法", "不代表", "不意味着", "可能", "或许",
         )) else ""
-    explanation = re.sub(r"(?:没有|未发现|未见|无|不存在)(?:计算|运算|书写|抄写|数数|计数|单位){0,2}(?:错误|差错)|不是错误|并未(?:算错|写错|答错)",
+    explanation = re.sub(r"(?:没有|未发现|未见|无|不存在)(?:计算|运算|书写|抄写|数数|计数|单位){0,2}(?:错误|差错)|不是错误|并未(?:算错|写错|答错)|(?:不是|并非|不属于)(?:孩子|学生|本题)?的?(?:答案|作答|解答|计算|书写|步骤)[中里]?的?(?:错误|问题)",
                          negated_error, explanation)
     chosen = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(?:[）).。:：、，,；;\s]|$)", answer)
     if status == "looks_correct" and chosen:
