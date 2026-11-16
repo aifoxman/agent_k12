@@ -78,6 +78,42 @@ def test_incremental_scan_publishes_a_whole_question_before_later_tokens(monkeyp
     assert result[0]["answer_regions"] == [[.1, .4, .7, .2]]
 
 
+@pytest.mark.parametrize("wrapper", ["pretty", "array", "question"])
+def test_streaming_inventory_accepts_complete_provider_wrappers_without_partial_objects(monkeypatch, wrapper):
+    from types import SimpleNamespace
+    item = {"coordinate_space": "normalized_0_1000", "path": ["1"], "label": "one",
+            "evidence": "visible printed question", "box": [100, 100, 700, 300],
+            "progress": "blank", "confidence": .96}
+    value = [item] if wrapper == "array" else {"question": item} if wrapper == "question" else item
+    text = json.dumps(value, indent=2)
+    received = []
+    def stream(*_):
+        yield text[:30]
+        assert not received
+        yield text[30:]
+    monkeypatch.setattr(page_prep, "stream_model", stream)
+    monkeypatch.setattr(page_prep, "post_model", lambda *_a, **_k: pytest.fail("Unnecessary second read"))
+    result = page_prep.inventory_page(SimpleNamespace(ai_model="test"), paper(), None,
+                                      lambda item, ordinal: received.append(item))
+    assert len(received) == 1 and result[0]["box"] == [.1, .1, .7, .3]
+
+
+def test_empty_stream_gets_one_bounded_ordinary_scan_instead_of_silently_disabling_cache(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(page_prep, "stream_model", lambda *_a: iter([]))
+    calls = []
+    def ordinary(_settings, payload, **kwargs):
+        calls.append(kwargs)
+        assert payload["response_format"] == {"type": "json_object"}
+        return {"choices": [{"message": {"content": json.dumps({"questions": [{
+            "path": ["1"], "label": "one", "evidence": "real visible question",
+            "box": [.1, .1, .7, .3], "progress": "blank", "confidence": .96}]})}}]}
+    monkeypatch.setattr(page_prep, "post_model", ordinary)
+    result = page_prep.inventory_page(SimpleNamespace(ai_model="test", ai_timeout_seconds=90),
+                                      paper(), None, lambda *_a: None)
+    assert len(result) == 1 and calls == [{"timeout": 30}]
+
+
 def test_index_exposes_no_answers_and_binding_checks_hash_session_pixels_and_overlap(prepared):
     _, module, _, session, family, image, service = prepared
     service.frames["current-page"] = image

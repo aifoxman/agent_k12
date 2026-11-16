@@ -10,6 +10,7 @@ import re
 import time
 import unicodedata
 import uuid
+from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from difflib import SequenceMatcher
@@ -123,10 +124,12 @@ def inventory_page(settings: Settings, image: bytes,
         "不能包含答案、孩子笔迹、推导、运算结果或猜测。"
         "每题最多4个简短条件、一个所求、4个短词锚点；锚点紧贴原文，不框整题，坐标相对整图。"
         "无法可靠摘录时reading=null，不为填字段编造。"
-        "box 是相对整图的归一化坐标，最多 60 道，不返回不可读题。"
+        "必须声明coordinate_space=normalized_0_1，box和answer_regions均相对整图，所有坐标在0至1之间，"
+        "不是0至1000或像素。最多60道，不返回不可读题。"
         "box包括本题题干和原图；另用answer_regions列出本题确实可见的答题空白区域，"
         "每个区域也是[x,y,w,h]，最多4个；不要包含下一题、其他题或整页，不确定则[]。"
     )
+    ordinary_instruction = instruction
     if on_question:
         instruction += ("本次采用JSONL流：每识别完一道题立刻输出一个完整JSON对象并换行，"
                         "对象就是questions数组中的单题字段，不要questions外壳、Markdown或总括行。"
@@ -148,20 +151,35 @@ def inventory_page(settings: Settings, image: bytes,
                    ]},
                ]}
     found = []
+    dropped = Counter()
 
     def accept(item):
+        if isinstance(item, list):
+            for child in item[:60 - len(found)]:
+                accept(child)
+            return
         if not isinstance(item, dict):
+            return
+        if isinstance(item.get("question"), dict):
+            accept(item["question"])
             return
         if isinstance(item.get("questions"), list):
             for child in item["questions"][:60 - len(found)]:
                 accept(child)
             return
-        box = normalized_box(item.get("box"))
+        scale = 1000 if item.get("coordinate_space") == "normalized_0_1000" else 1
+        def box_value(value):
+            try:
+                return normalized_box([float(v) / scale for v in value]) if isinstance(value, list) else None
+            except (ValueError, TypeError):
+                return None
+        box = box_value(item.get("box"))
         path = item.get("path")
         evidence = str(item.get("evidence") or "").strip()[:1200]
         confidence = bounded_confidence(item.get("confidence"))
         if (not box or not isinstance(path, list) or not path or
                 confidence < .65 or len(evidence) < 4):
+            dropped["box" if not box else "fields"] += 1
             return
         if any(entry["path"] == [str(part).strip()[:40] for part in path[:5]] for entry in found):
             return
@@ -175,40 +193,48 @@ def inventory_page(settings: Settings, image: bytes,
             else "occluded",
             "confidence": confidence,
             "answer_regions": [region for value in (item.get("answer_regions") or [])[:4]
-                               if (region := normalized_box(value))],
+                               if (region := box_value(value))],
         })
-        found[-1]["reading"] = normalize_reading(item.get("reading"), found[-1], image)
+        reading = item.get("reading")
+        if scale != 1 and isinstance(reading, dict):
+            reading = {**reading, "anchors": [{**a, "box": box_value(a.get("box"))}
+                                               for a in reading.get("anchors", []) if isinstance(a, dict)]}
+        found[-1]["reading"] = normalize_reading(reading, found[-1], image)
         if on_question:
             on_question(found[-1], len(found) - 1)
 
     if on_question:
         payload.pop("response_format", None)
-        buffer = ""
+        buffer, received = "", 0
+        decoder = json.JSONDecoder()
         for delta in stream_model(settings, payload):
             buffer += delta
-            if len(buffer) > 200_000:
+            received += len(delta)
+            if received > 200_000:
                 raise ValueError("Question index exceeds limit")
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
+            while buffer.strip():
+                buffer = buffer.lstrip(" \t\r\n,")
+                if buffer.startswith("```"):
+                    if "\n" not in buffer:
+                        break
+                    buffer = buffer.split("\n", 1)[1]
                 try:
-                    accept(parse_model_json(line))
-                except (ValueError, KeyError, TypeError):
-                    pass
+                    value, end = decoder.raw_decode(buffer)
+                except ValueError:
+                    break  # Never publish an unfinished JSON object.
+                buffer = buffer[end:]
+                accept(value)
                 if len(found) >= 60:
                     return found
-        if buffer.strip():
-            try:
-                accept(parse_model_json(buffer))
-            except (ValueError, KeyError, TypeError):
-                pass
         if found:
             return found
-        # Compatibility for providers that ignore JSONL; a complete ordinary
-        # response is still useful, but never publish a partially parsed object.
-        try:
-            raw = parse_model_json(buffer)
-        except ValueError:
-            raw = {}
+        # One bounded ordinary request supports providers that buffer or return
+        # a non-JSONL shape. Do not abandon this page silently after an empty scan.
+        logger.warning("Page streaming index empty: received_chars=%d rejected=%s", received, dict(dropped))
+        payload["messages"][0]["content"] = ordinary_instruction
+        payload["response_format"] = {"type": "json_object"}
+        raw = parse_model_json(post_model(settings, payload, timeout=min(30, settings.ai_timeout_seconds))
+                               ["choices"][0]["message"]["content"])
     else:
         raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])
     for item in (raw.get("questions") or [])[:60]:

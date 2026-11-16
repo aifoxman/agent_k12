@@ -4095,7 +4095,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     },
     [],
   );
-  const prefetchTeachingPage = async (sid, image) => {
+  const prefetchTeachingPage = async (sid, image, attempt = 0) => {
     pagePrefetchRef.current?.controller.abort();
     const work = { controller: new AbortController(), revision: cameraViewRevision.current, sid };
     pagePrefetchRef.current = work;
@@ -4105,6 +4105,24 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       cameraViewRevision.current === work.revision &&
       hintScopeRef.current?.sessionId === sid &&
       hintScopeRef.current?.stage === 'active';
+    const retry = () => {
+      if (!current()) return;
+      work.controller.abort();
+      pagePrefetchRef.current = null;
+      if (attempt >= 1) return;
+      setTimeout(() => {
+        if (
+          pagePrefetchRef.current ||
+          hintScopeRef.current?.stage !== 'active' ||
+          hintScopeRef.current.sessionId !== sid ||
+          cameraViewRevision.current !== work.revision
+        )
+          return;
+        capture(false, false, null, 1800)
+          .then((fresh) => prefetchTeachingPage(sid, fresh, attempt + 1))
+          .catch(() => {});
+      }, 3000);
+    };
     const form = new FormData();
     form.append('image', image, 'paper.jpg');
     const localReading = recognizeHintAnchors(image, { signal: work.controller.signal });
@@ -4113,6 +4131,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       method: 'POST',
       body: form,
       signal: work.controller.signal,
+    }).catch((error) => {
+      retry();
+      throw error;
     });
     if (!current() || !prepared.page_id) return prepared;
     const path = `/v1/sessions/${sid}/page-prep/${prepared.page_id}`;
@@ -4130,7 +4151,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       pixels = await paperPixels(frame);
       if (current() && work.latest) pageIndexRef.current = { ...work.latest, pixels };
     };
-    const loading = loadFrame().catch(() => {});
+    const loading = loadFrame().catch(retry);
     streamApi(
       `${path}/stream`,
       new FormData(),
@@ -4140,7 +4161,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         if (pixels) pageIndexRef.current = { ...data, pixels };
       },
       work.controller.signal,
-    ).catch(() => {});
+    ).catch(retry);
     await loading;
     return prepared;
   };
