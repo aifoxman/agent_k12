@@ -31,6 +31,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8016)
     parser.add_argument("--frontend-port", type=int, default=5186)
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--question-bank-budget", type=Path)
+    parser.add_argument("--question-bank-round", type=int, choices=(1, 2, 3), default=1)
+    parser.add_argument("--server-source", type=Path, help="Frozen backend package directory for paired baseline evaluation")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535 or args.port == 8003:
         parser.error("Use a dedicated acceptance port; port 8003 is excluded")
@@ -39,6 +42,15 @@ def main() -> None:
     if not directory.is_relative_to(allowed) or directory == allowed:
         parser.error("output must be a run directory inside output/acceptance")
     directory.mkdir(parents=True, exist_ok=True)
+    if args.server_source:
+        source = args.server_source.resolve(strict=True)
+        if not source.is_relative_to(allowed) or not (source / "k12_server" / "app.py").is_file():
+            parser.error("Frozen backend source must be inside output/acceptance")
+        sys.path.insert(0, str(source))
+    if args.question_bank_budget:
+        sys.path.insert(0, str(ROOT))
+        from scripts.question_bank.transport import install
+        install(args.question_bank_budget, args.question_bank_round, directory / "upstream.jsonl")
     from dotenv import dotenv_values
 
     config = dotenv_values(ROOT / ".env") if args.live else {}
@@ -184,12 +196,32 @@ def main() -> None:
     ai.read_teaching_anchors = anchor_read
     ai.verify_teaching_anchors = anchor_verify
     from k12_server.app import app
+    acceptance_source = None
+    if args.question_bank_budget:
+        from scripts.question_bank.seal import source_hash
+        import k12_server
+        acceptance_source = source_hash(Path(k12_server.__file__).parent)
 
     @app.middleware("http")
     async def observe(request, call_next):
+        evaluation_token = None
+        if args.question_bank_budget:
+            from scripts.question_bank.transport import TRACE, valid_trace
+            try:
+                trace = valid_trace(request.headers.get("X-K12-Evaluation-Trace", "background"))
+            except ValueError:
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": "Invalid evaluation trace"}, status_code=400)
+            evaluation_token = TRACE.set(trace)
         started = time.monotonic()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        finally:
+            if evaluation_token is not None:
+                TRACE.reset(evaluation_token)
         response.headers["X-K12-Acceptance-Run"] = directory.name
+        if acceptance_source:
+            response.headers["X-K12-Acceptance-Source"] = acceptance_source
         event(
             "http",
             method=request.method,

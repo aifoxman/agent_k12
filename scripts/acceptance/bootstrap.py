@@ -23,6 +23,8 @@ def verify_acceptance_api(client: httpx.Client, run_id: str) -> None:
 def bootstrap(
     base_url: str, frontend_url: str, directory: Path, image: Path, state_name: str = "state.json",
     setup_result_name: str = "setup-result.json",
+    grade: str = "三年级",
+    evaluation_trace: str | None = None,
 ) -> dict:
     address = urlsplit(base_url)
     if (
@@ -37,6 +39,9 @@ def bootstrap(
         raise ValueError("Only a dedicated loopback acceptance API is allowed")
     directory = directory.resolve()
     with httpx.Client(base_url=base_url, timeout=180) as client:
+        if evaluation_trace:
+            from scripts.question_bank.transport import valid_trace
+            client.headers["X-K12-Evaluation-Trace"] = valid_trace(evaluation_trace)
         verify_acceptance_api(client, directory.name)
         if Path(state_name).name != state_name or not state_name.endswith(".json"):
             raise ValueError("state_name must be a JSON filename")
@@ -68,7 +73,7 @@ def bootstrap(
                 "password": secrets.token_urlsafe(28),
                 "child_name": "自动验收合成学生",
                 "age_band": "primary",
-                "grade": "三年级",
+                "grade": grade,
                 "textbook": None,
             },
         )
