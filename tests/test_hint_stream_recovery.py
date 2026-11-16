@@ -126,6 +126,19 @@ def test_unconfirmed_crop_does_not_bypass_location_or_invent_teaching(api, monke
     assert len(locations) == 2
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_literal_disagreement_asks_about_the_glyph_without_relocating_or_solving(api, monkeypatch, stream):
+    module, locations = api[1], []
+    monkeypatch.setattr(module, "locate_question", lambda *_a, **_k: locations.append(1) or
+                        {"found": False, "issue": "critical_literal_disagreement"})
+    monkeypatch.setattr(module, "analyze", lambda *_a, **_k: pytest.fail("Disputed glyph cannot be taught"))
+    result, _ = ask(api, selected_region="true", stream=stream)
+    assert result["located"] is False and result["delivery_complete"] is False
+    assert result["location_issue"] == "critical_literal_disagreement"
+    assert "关键字" in result["response"] and "题号" not in result["response"]
+    assert len(locations) == 1
+
+
 def test_pen_recovery_keeps_the_same_marks_and_does_not_bypass_a_failed_target(api, monkeypatch):
     module, locations = api[1], []
     marks = [[[.2, .3], [.5, .3]]]

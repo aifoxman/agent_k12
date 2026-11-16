@@ -2313,6 +2313,13 @@ def review_correction(correction_id: str, body: CorrectionUpdate,
     return {"id": correction_id, "review_status": body.review_status}
 
 
+def _literal_clarification(level: int) -> dict:
+    return {"located": False, "target_box": None, "level": level,
+            "location_issue": "critical_literal_disagreement", "delivery_complete": False,
+            "teaching_move": "clarify_target", "reply_mode": "spoken", "visual_beats": [],
+            "response": "这道题里有个关键字还需要核对，先不急着解。请放大题干中的那个字，或把它读给我听。"}
+
+
 def _hint_event(name: str, data: dict) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -2761,6 +2768,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             pass
     def events():
         reading_beats = []
+        located = {}
 
         def explanation_beat(beat):
             if not reading_beats:
@@ -2823,7 +2831,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                              if selected_region else question[:200])
                 located = locate_question(locator_settings, image_bytes, reference, context,
                                           False if selected_region else spoken_reference or not bool(target))
-                if not located["found"] and target:
+                if not located["found"] and target and located.get("issue") != "critical_literal_disagreement":
                     located = locate_question(locator_settings, image_bytes, target[:100])
                 if located["found"]:
                     target_item = {**located, "solution": None, "verification_status": "pending",
@@ -2831,6 +2839,9 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             except HTTPException:
                 pass
         if not target_item:
+            if located.get("issue") == "critical_literal_disagreement":
+                yield _hint_event("done", _hint_tier_contract(_literal_clarification(level), level))
+                return
             # Reuse the existing ordinary-path location recovery before choosing
             # the transport. A recovered target still deserves structured teaching;
             # it must not silently become one long ordinary response.
@@ -3249,9 +3260,12 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
             location = locate_question(locator_settings, image_bytes, question[:200],
                                        teaching_context, True)
             target_from_progress = location["found"]
-        if not location or not location["found"]:
+        if ((not location or not location["found"])
+                and (location or {}).get("issue") != "critical_literal_disagreement"):
             location = locate_question(locator_settings, image_bytes, target[:100])
         if not location["found"]:
+            if location.get("issue") == "critical_literal_disagreement":
+                return _literal_clarification(level)
             return {"located": False, "target_box": None, "level": level,
                     "response": f"没能在当前纸面可靠找到{target[:50]}。如果有两页，请连同左页或右页一起说题号；也可读题目开头几个字，或在画面上圈画。"}
         focus_image, focus_region = focus_question_image(image_bytes, location["box"])
@@ -3262,6 +3276,8 @@ def _hint(*, session_id: str, question: str, task_id: str | None, target: str | 
         location = locate_question(locator_settings, image_bytes, reference, teaching_context,
                                    not selected_region)
         if not location["found"]:
+            if location.get("issue") == "critical_literal_disagreement":
+                return _literal_clarification(level)
             return {"located": False, "target_box": None, "level": level,
                     "response": "我看了整页，还不能确定你指哪一题。请说题号、读一句题干，或在画面上圈画。"}
         focus_image, focus_region = focus_question_image(image_bytes, location["box"])

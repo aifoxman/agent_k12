@@ -1564,7 +1564,8 @@ def locate_question(settings: Settings, image: bytes, target: str,
         found = (raw.get("found") is True and raw.get("ambiguous") is not True
                  and box is not None and confidence >= (.80 if infer or marks else .72)
                  and bool(evidence))
-        if found and not verify_critical_literal_read(settings, image, box, evidence):
+        literal_disagreement = found and not verify_critical_literal_read(settings, image, box, evidence)
+        if literal_disagreement:
             logger.warning("Critical literal readings disagree; withholding the located teaching target")
             found = False
         # Cropped worksheets legitimately omit the printed number. A missing
@@ -1576,6 +1577,8 @@ def locate_question(settings: Settings, image: bytes, target: str,
                 "label": label if found else "", "evidence": evidence if found else "",
                 "confidence": confidence,
                 "anchors": normalized_text_anchors(raw.get("anchors"), box, evidence) if found else []}
+        if literal_disagreement:
+            result["issue"] = "critical_literal_disagreement"
         if found and isinstance(raw.get("reading"), dict):
             # Share the scan-time literal and pixel gates; optional reading must
             # never turn target location into a solver or require a second call.
