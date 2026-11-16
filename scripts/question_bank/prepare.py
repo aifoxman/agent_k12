@@ -34,13 +34,20 @@ def quote_regions(page, quote):
     return result
 
 
+def bounded_quote_expansion(rect, expanded, page_rect) -> bool:
+    """A nearby PDF line may double a thin crop's area without being distant."""
+    return (expanded.get_area() <= rect.get_area() * 1.6 or
+            (expanded.width <= rect.width + page_rect.width * .035
+             and expanded.height <= rect.height + page_rect.height * .035))
+
+
 def prepare_document(record, output: Path, settings, round_id=1):
     import pymupdf
     identifier = record["sha256"][:20]
     spec_path = output / "private" / "specs" / f"{identifier}.json"
     cached_spec = read(spec_path) if spec_path.exists() else None
-    if cached_spec and (cached_spec.get("validation_version") == 5 or
-                        cached_spec.get("validation_version") == 4 and cached_spec.get("accepted")
+    if cached_spec and (cached_spec.get("validation_version") == 6 or
+                        cached_spec.get("validation_version") in {4, 5} and cached_spec.get("accepted")
                         and cached_spec.get("independent_reference_check") is True):
         return cached_spec
     content = read(output / "private" / "documents" / f"{record['sha256']}.json")
@@ -95,7 +102,7 @@ def prepare_document(record, output: Path, settings, round_id=1):
                 allowance = pymupdf.Rect(rect.x0 - page_rect.width * .035, rect.y0 - page_rect.height * .035,
                                          rect.x1 + page_rect.width * .035, rect.y1 + page_rect.height * .035)
                 expanded = rect | nearby
-                if allowance.contains(nearby) and expanded.get_area() <= rect.get_area() * 1.6:
+                if allowance.contains(nearby) and bounded_quote_expansion(rect, expanded, page_rect):
                     rect = (expanded + (-3, -3, 3, 3)) & page_rect
             if not quote_rects or not any(rect.contains(r) for r in quote_rects):
                 spec["accepted"] = False
@@ -136,7 +143,7 @@ def prepare_document(record, output: Path, settings, round_id=1):
                                 "box": [(match.x0 - rect.x0) / rect.width, (match.y0 - rect.y0) / rect.height,
                                         match.width / rect.width, match.height / rect.height]})
         spec.setdefault("independent_reference_check", False)
-        spec["validation_version"] = 5
+        spec["validation_version"] = 6
         dump(spec_path, spec)
         return spec
 

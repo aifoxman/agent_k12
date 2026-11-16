@@ -15,6 +15,7 @@ from scripts.question_bank.budget import Budget, BudgetExceeded
 from scripts.question_bank.corpus import docx_content, inferred_subject, inventory
 from scripts.question_bank.prepare import group_cases
 from scripts.question_bank.prepare import partition_groups
+from scripts.question_bank.prepare import bounded_quote_expansion
 from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
 from scripts.question_bank.simulation import percentile, rendered_text_regions, safe_image, student_paper
 from scripts.question_bank.teacher import arithmetic, assess_review, distill, evaluation_contract, reference_view, validate_oracle
@@ -47,6 +48,16 @@ def test_holdout_keeps_source_groups_whole_and_reports_infeasible_math_coverage(
     assert {s["case_id"] for s in development} == {"seen", "same-source", "only-source"}
     assert coverage["missing_math_grades"] == [2]
     assert coverage["unfilled"] == 1
+
+
+def test_pdf_quote_snap_bounds_distance_instead_of_rejecting_all_thin_lines():
+    from types import SimpleNamespace
+    def rect(width, height):
+        return SimpleNamespace(width=width, height=height, get_area=lambda: width * height)
+    page = rect(600, 840)
+    assert bounded_quote_expansion(rect(438, 32), rect(438, 56), page)
+    assert not bounded_quote_expansion(rect(438, 32), rect(438, 90), page)
+    assert not bounded_quote_expansion(rect(32, 438), rect(90, 438), page)
 
 
 def test_source_answers_are_separated_even_when_filename_has_no_answer(tmp_path):
