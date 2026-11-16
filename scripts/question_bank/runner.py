@@ -185,6 +185,14 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
         if split == "holdout":
             from scripts.question_bank.seal import verify
             verify(output, tag, Path(__file__).resolve().parents[2] / "src" / "k12_server", actual_source)
+        if state_path.exists():
+            prior = read(state_path)
+            if prior.get("synthetic") is not True or prior.get("run_id") != api_run.name or prior.get("base_url") != base:
+                raise ValueError("Saved state does not belong to this isolated API")
+            dashboard = client.get("/v1/families/dashboard", headers={"Authorization": "Bearer " + prior["child_token"]})
+            active = (dashboard.json().get("session") or {}) if dashboard.is_success else {}
+            if active.get("id") != prior.get("session_id") or active.get("status") != "active":
+                state_path.replace(state_path.with_name(state_path.stem + ".expired-" + uuid.uuid4().hex[:8] + ".json"))
     # Real camera/setup preflight and pairing; no copied family or forged ticket.
     state = bootstrap(base, "http://127.0.0.1:5186/app/", api_run,
                       safe_image(output, case["images"]["hint"]),

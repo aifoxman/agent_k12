@@ -25,6 +25,26 @@ def database_for_run(directory: Path) -> Path:
     return database
 
 
+def secret_for_run(directory: Path) -> str:
+    """Keep disposable credentials valid across a source-version restart."""
+    directory = directory.resolve()
+    path = directory / "private" / "server-secret.txt"
+    if not path.resolve().is_relative_to(directory):
+        raise ValueError("Acceptance secret must remain inside its run")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="ascii") as target:
+                target.write(secrets.token_urlsafe(48))
+        except FileExistsError:
+            pass
+    value = path.read_text(encoding="ascii").strip()
+    if len(value) < 48 or not all(c.isalnum() or c in "_-" for c in value):
+        raise ValueError("Invalid isolated acceptance secret")
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
@@ -64,7 +84,7 @@ def main() -> None:
         os.environ["AI_API_URL"] = ""
         os.environ["AI_API_KEY"] = ""
         os.environ["AI_MODEL"] = ""
-    os.environ["APP_SECRET"] = secrets.token_urlsafe(48)
+    os.environ["APP_SECRET"] = secret_for_run(directory)
     os.environ["DATABASE_PATH"] = str(database_for_run(directory))
     os.environ["ALLOWED_ORIGINS"] = ",".join(
         (

@@ -194,3 +194,11 @@ def test_final_holdout_rejects_changed_candidate_or_wrong_server(tmp_path):
     (current / "app.py").write_text("tuned after seeing holdout", encoding="utf-8")
     with pytest.raises(ValueError):
         verify(tmp_path, "holdout-candidate", current)
+
+
+def test_isolated_secret_survives_restart_without_sharing_family_credentials(tmp_path):
+    from scripts.acceptance.serve import secret_for_run
+    first = secret_for_run(tmp_path / "run1")
+    assert secret_for_run(tmp_path / "run1") == first
+    assert secret_for_run(tmp_path / "run2") != first
+    assert len(first) >= 48
