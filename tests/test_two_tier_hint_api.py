@@ -150,6 +150,34 @@ def test_prior_response_is_bounded_guidance_not_a_saved_solution(api):
     assert bound["solution"] is None and bound["verification_status"] == "pending"
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_continuation_reuses_only_pixel_checked_word_positions_from_the_exact_frozen_frame(api, legacy):
+    from PIL import ImageDraw
+    picture = Image.new("RGB", (600, 800), "white")
+    ImageDraw.Draw(picture).rectangle((110, 210, 190, 230), fill="black")
+    output = io.BytesIO()
+    picture.save(output, "JPEG", quality=90)
+    api.image = output.getvalue()
+    word = api.target["evidence"][:4]
+    anchor = {"id": "known-word", "text": word, "box": [.15, .24, .2, .07], "confidence": .97}
+    blank = {**anchor, "id": "blank", "box": [.5, .5, .1, .05]}
+    beat = {**BEAT, "page": [{"kind": "underline", "anchor_id": a["id"],
+                              "text": word, "box": a["box"]} for a in (anchor, blank)]}
+    saved = json.loads(api.module._hint_scene_json({"target_box": BOX,
+        "target_label": api.target["label"], "visual_beats": [beat]}, api.image,
+        {**api.target, "anchors": [anchor, blank]}))
+    assert [a["id"] for a in saved["source_anchors"]] == ["known-word"]
+    if legacy:
+        saved.pop("source_anchors")
+    change_source(api, scene=saved)
+    target = continuation(api)
+    assert [a["id"] for a in target["anchors"]] == ["known-word"]
+    assert target["anchors"][0]["box"] == anchor["box"]
+    assert target["solution"] is None
+    public = api.module._read_hint_teaching_scene(json.dumps(saved))
+    assert "source_anchors" not in public and "source_image_sha256" not in public
+
+
 @pytest.mark.parametrize(
     "change",
     [

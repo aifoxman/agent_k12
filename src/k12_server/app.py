@@ -2384,6 +2384,10 @@ def _hint_scene_json(result: dict, image_bytes: bytes | None = None,
                      source_read_confidence=confidence)
         if isinstance(located.get("id"), str):
             scene["source_question_id"] = located["id"][:64]
+        anchors = verify_teaching_anchors(image_bytes, normalized_text_anchors(
+            located.get("anchors"), scene["box"], evidence), scene["box"], evidence)
+        if anchors:
+            scene["source_anchors"] = anchors[:12]
     return json.dumps(scene, ensure_ascii=False, allow_nan=False) if scene else None
 
 
@@ -2452,6 +2456,21 @@ def _continued_teaching_target(session_id: str, task_id: str | None,
     identifier = saved.get("source_question_id")
     if isinstance(identifier, str) and identifier:
         target["id"] = identifier[:64]
+    anchors = saved.get("source_anchors")
+    if not isinstance(anchors, list):
+        # Older first-tier records still carry literal, pixel-grounded word
+        # marks. Recover those only; solution notes and invented geometry are
+        # not source anchors. The exact photograph digest was checked above.
+        anchors = [{"id": mark.get("anchor_id"), "kind": "text",
+                    "text": mark.get("anchor_text") or mark.get("text"),
+                    "box": mark.get("box"), "confidence": .9}
+                   for beat in scene["beats"] for mark in beat.get("page", [])
+                   if isinstance(mark, dict) and mark.get("kind") in {"underline", "circle", "check"}
+                   and mark.get("anchor_id") and mark.get("box")]
+    anchors = verify_teaching_anchors(image_bytes, normalized_text_anchors(
+        anchors, target["box"], target["evidence"]), target["box"], target["evidence"])
+    if anchors:
+        target["anchors"] = anchors
     return target
 
 
