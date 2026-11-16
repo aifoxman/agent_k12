@@ -2868,10 +2868,12 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             logger.info("hint_target_ready session=%s cached=%s elapsed_ms=%d",
                         session_id, bool(target_item.get("id")),
                         round((time.monotonic() - request_started) * 1000))
+            prepared_intro = (reading_review(target_item, image_bytes)
+                              if not student_thought and not previous_hint_id else None)
             yield _hint_event("target", {"box": target_item["box"],
                                          "label": target_item["label"],
                                          "question_id": target_item.get("id"),
-                                         "teaching_tier": level})
+                                         "teaching_tier": level, "reading": prepared_intro})
             anchor_future = None
 
             def read_anchors_in_parallel():
@@ -2897,7 +2899,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                         "_teaching_anchor_image_key": annotated.get("_teaching_anchor_image_key")}
 
             if not student_thought and not previous_hint_id:
-                intro = reading_review(target_item, image_bytes)
+                intro = prepared_intro
                 if intro:
                     reading_beats.append(intro)
                     target_item = {**target_item, "_reading_delivered": intro["speech"],

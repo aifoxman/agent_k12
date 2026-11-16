@@ -6024,11 +6024,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
               label: data.label || reference,
               cue: null,
             });
-            if (
-              localSelection?.question?.id === data.question_id &&
-              localSelection.question.reading
-            )
-              enqueueBeat(localSelection.question.reading);
+            if (localSelection?.question?.id === data.question_id && data.reading)
+              enqueueBeat(data.reading);
           }
           if (event === 'visual') {
             pendingVisual.push(data);

@@ -839,6 +839,11 @@ class PagePreparation:
         try:
             if not self._current(session_id, page_id):
                 return
+            with connect(self.settings.database_path) as db:
+                existing = db.execute("SELECT verification_status FROM prepared_questions "
+                                      "WHERE page_id=? AND ordinal=?", (page_id, ordinal)).fetchone()
+            if existing and existing["verification_status"] in {"verified", "rechecked"}:
+                return  # A promoted foreground job may already have finished.
             result = solve_question(solver, image, question)
             uncertain = (result["ambiguous"] or result["confidence"] < .85 or
                          question["confidence"] < .85 or not result["answer"])

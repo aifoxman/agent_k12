@@ -44,8 +44,10 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     reading = normalize_reading(reading, {**question, "confidence": question["read_confidence"]}, image)
     if not reading:
         return None
-    terms = "、".join(f"“{text}”" for text in reading["conditions"])
-    speech = f"先看{question['label']}。题目给出的条件是{terms}。要我们求的是“{reading['ask']}”。"
+    first, *remaining = reading["conditions"]
+    speech = (f"先看{question['label']}，题目告诉我们“{first}”。"
+              + "".join(f"还有一个条件是“{text}”。" for text in remaining)
+              + f"要我们求的是“{reading['ask']}”。")
     anchors = reading["anchors"]
     beat = normalized_teaching_beat({
         "speech": speech, "step_id": 1, "step_title": "读题审题", "step_end": True,
