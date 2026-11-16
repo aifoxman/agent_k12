@@ -25,7 +25,7 @@ from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
 from .reading_review import normalize_reading
-from .paper_registration import IDENTITY, map_box, stroke_scores, valid_transform
+from .paper_registration import IDENTITY, complete_answer_regions, map_box, stroke_scores, valid_transform
 from .reading_review import reading_review
 
 logger = logging.getLogger(__name__)
@@ -991,7 +991,7 @@ class PagePreparation:
                           "anchors_ready": bool(intro and intro["page"]),
                           "solution_ready": item["verification_status"] in {"verified", "rechecked"}})
         return {"page_id": page_id, "frame_sha256": hashlib.sha256(frame).hexdigest(),
-                "status": page["status"], "questions": items,
+                "status": page["status"], "questions": complete_answer_regions(items),
                 "index_complete": page_id in self.indexed or page["status"] == "ready"}
 
     def add_local_reading(self, page_id: str, payload: str) -> int:

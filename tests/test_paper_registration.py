@@ -8,7 +8,7 @@ import random
 import pytest
 from PIL import Image, ImageDraw
 
-from k12_server.paper_registration import IDENTITY, map_box, stroke_scores, valid_transform
+from k12_server.paper_registration import IDENTITY, complete_answer_regions, map_box, stroke_scores, valid_transform
 from k12_server import page_prep
 from test_prepared_lesson_wait import prepared  # noqa: F401
 
@@ -45,6 +45,16 @@ def test_answer_area_is_used_and_cross_question_scores_remain_ambiguous():
     assert stroke_scores(questions, [[[.2, .3], [.6, .3]]])[0][2]["id"] == "one"
     scores = stroke_scores(questions, [[[.3, .2], [.3, .55]]])
     assert abs(scores[0][0] - scores[1][0]) < .16
+
+
+def test_writing_gap_extends_to_the_next_question_in_the_same_column_only():
+    items = [{"id": "one", "box": [.1, .1, .35, .05], "read_confidence": .96},
+             {"id": "right-column", "box": [.55, .2, .35, .05], "read_confidence": .96},
+             {"id": "two", "box": [.1, .3, .35, .05], "read_confidence": .96}]
+    completed = complete_answer_regions(items)
+    assert completed[0]["answer_regions"][0] == pytest.approx([.1, .15, .35, .144])
+    assert not completed[1]["answer_regions"] and not completed[2]["answer_regions"]
+    assert stroke_scores(completed, [[[.2, .25], [.4, .25]]])[0][2]["id"] == "one"
 
 
 def test_incremental_scan_publishes_a_whole_question_before_later_tokens(monkeypatch):

@@ -15,6 +15,33 @@ from PIL import Image
 IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
 
+def complete_answer_regions(questions: list[dict]) -> list[dict]:
+    """Include the writing gap only when a reliable next item bounds its end.
+
+    This is selection geometry, never an answer or a new printed condition.
+    Do not extrapolate below the final question or across different columns.
+    """
+    result = []
+    for item in questions:
+        x, y, w, h = item["box"]
+        regions = list(item.get("answer_regions") or [])
+        following = []
+        for other in questions:
+            if other["id"] == item["id"] or other.get("read_confidence", 0) < .85:
+                continue
+            ox, oy, ow, _ = other["box"]
+            overlap = max(0, min(x + w, ox + ow) - max(x, ox))
+            if (oy >= y + h and overlap / min(w, ow) >= .7 and
+                    .5 <= ow / w <= 2 and abs(x - ox) < .12):
+                following.append(oy)
+        if following:
+            gap = min(following) - y - h
+            if .015 <= gap <= .25:
+                regions.append([x, y + h, w, max(0, gap - .006)])
+        result.append({**item, "answer_regions": regions})
+    return result
+
+
 def project(matrix, x, y):
     denominator = matrix[6] * x + matrix[7] * y + matrix[8]
     if abs(denominator) < .1:
