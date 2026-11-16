@@ -105,6 +105,7 @@ import {
 } from './teaching-notes';
 import {
   continuationTeachingTarget,
+  continuingPresentation,
   mergeTeachingTarget,
   visibleTeachingDraft,
 } from './teaching-session';
@@ -6011,6 +6012,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
               imageUrl: imageUrl(),
               sceneKey: `live:${playbackRun}`,
               beats: [...visibleSteps],
+              continuationBeats: waitingContext?.beats || [],
             }),
             playbackVersion: (current?.playbackVersion || 0) + 1,
             paperPresentationVisible: paperVisible,
@@ -7403,6 +7405,19 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     sessionId,
     taskId: selectedTask,
   });
+  const paperPresentation = continuingPresentation(hintTarget, reviewBeat);
+  const continuedDraft =
+    stage === 'active' && teachingMode === 'lesson' && hintTarget?.continuationBeats?.length
+      ? teachingDraftFromTarget(
+          {
+            ...hintTarget,
+            beats: paperPresentation.beats,
+          },
+          sessionId,
+          selectedTask,
+        )
+      : null;
+  const scratchTarget = continuedDraft || draftTarget;
   const guidanceExplanation = teachingExplanation(
     guidanceAvailable
       ? {
@@ -7831,8 +7846,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 <TeachingPaperFrame
                   key={hintTarget.sceneKey}
                   target={hintTarget}
-                  beats={hintTarget.beats || []}
-                  beatIndex={reviewBeat}
+                  beats={paperPresentation.beats}
+                  beatIndex={paperPresentation.beatIndex}
                   showMarks={showTeachingMarks}
                   onToggleMarks={() => setShowTeachingMarks((shown) => !shown)}
                 >
@@ -7852,9 +7867,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                   )}
                   <TeachingInk
                     target={hintTarget}
-                    beats={hintTarget.beats || []}
+                    beats={paperPresentation.beats}
                     show={showTeachingMarks}
-                    beatIndex={reviewBeat}
+                    beatIndex={paperPresentation.beatIndex}
                     playbackVersion={hintTarget.playbackVersion}
                   />
                   {hintTarget.selectionStrokes?.length > 0 && (
@@ -8052,14 +8067,14 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
               </div>
             )}
           </div>
-          {draftTarget && (
+          {scratchTarget && (
             <TeachingScratch
-              key={`${sessionId}:${selectedTask}:${draftTarget.sceneKey}`}
-              target={draftTarget}
-              beats={draftTarget.beats || []}
+              key={`${sessionId}:${selectedTask}:${scratchTarget.sceneKey}`}
+              target={scratchTarget}
+              beats={scratchTarget.beats || []}
               inline={stage !== 'active'}
               playbackVersion={hintTarget?.playbackVersion}
-              playbackBeatIndex={reviewBeat}
+              playbackBeatIndex={continuedDraft ? paperPresentation.beatIndex : reviewBeat}
               paperVisible={teachingPaperVisible && hintTarget?.paperPresentationVisible !== false}
             />
           )}

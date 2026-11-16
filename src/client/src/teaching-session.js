@@ -15,6 +15,7 @@ export function mergeTeachingTarget(current, update) {
     beats: update.beats || previous.beats || [],
     textAnchors: update.textAnchors || previous.textAnchors || [],
     selectionStrokes: update.selectionStrokes || previous.selectionStrokes || [],
+    continuationBeats: update.continuationBeats || previous.continuationBeats || [],
   };
 }
 
@@ -29,6 +30,16 @@ export function continuationTeachingTarget(binding, target, scene) {
     return null;
   if (JSON.stringify(binding.box) !== JSON.stringify(target.box)) return null;
   return target;
+}
+
+// Presentation can retain released work from depth one without counting it as
+// newly generated depth-two steps. Review indices still address the new lesson.
+export function continuingPresentation(target, beatIndex = null) {
+  const context = target?.continuationBeats || [];
+  return {
+    beats: [...context, ...(target?.beats || [])],
+    beatIndex: beatIndex === null ? null : context.length + beatIndex,
+  };
 }
 
 // Saving a lesson never opens it. Only an active lesson or an explicit review

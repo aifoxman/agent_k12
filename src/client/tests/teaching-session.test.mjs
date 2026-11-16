@@ -5,6 +5,7 @@ import {
   teachingFollowupPrompt,
   visibleTeachingDraft,
   continuationTeachingTarget,
+  continuingPresentation,
 } from '../src/teaching-session.js';
 
 test('continuation retains released work only for the same bound photograph and question', () => {
@@ -25,6 +26,20 @@ test('continuation retains released work only for the same bound photograph and 
     continuationTeachingTarget({ image, box }, { ...target, beats: [] }, { image }),
     null,
   );
+});
+
+test('new speech without drawing keeps previous ink and notes without changing new review indices', () => {
+  const previous = [
+    { step_id: 1, page: [{ kind: 'underline' }], scratch: [{ text: '已讲的理由' }] },
+  ];
+  const next = [{ step_id: 1, speech: '现在接着讲', page: [], scratch: [] }];
+  const target = { imageUrl: 'blob:same', continuationBeats: previous, beats: next };
+  const shown = continuingPresentation(target, 0);
+  assert.deepEqual(shown.beats, [...previous, ...next]);
+  assert.equal(shown.beatIndex, previous.length);
+  assert.equal(target.beats.length, 1, 'Old work became additional current lesson steps');
+  assert.equal(continuingPresentation(target).beatIndex, null);
+  assert.deepEqual(mergeTeachingTarget(target, { imageUrl: 'blob:another' }).continuationBeats, []);
 });
 
 test('late localization and a done event without a box preserve already spoken page operations', () => {
