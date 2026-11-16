@@ -2910,6 +2910,43 @@ select:focus {
   touch-action: none;
   cursor: crosshair;
 }
+.selection-snapshot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.selection-question-choice {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d7d9c8;
+  border-radius: 12px;
+  color: #243a2c;
+  background: #fffdf4;
+  box-shadow: 0 4px 16px #172b2226;
+}
+.selection-question-choice button {
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 1px solid #829b75;
+  border-radius: 8px;
+  background: #eaf0df;
+  color: #243a2c;
+}
+.selection-question-choice .quiet {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+}
 .selection-ink {
   position: absolute;
   inset: 0;

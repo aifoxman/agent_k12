@@ -121,15 +121,10 @@ import { guardVoiceHoldSelection, setVoiceHoldGestureActive } from './voice-hold
 import { paperMarkEdge, visiblePaperMarks } from './paper-marks';
 import { dashboardSpeechConfiguration, premiumVoiceQuota } from './premium-voice';
 import { createPenHintScheduler, penSelectionBounds, penSelectionReady } from './pen-selection';
+import { matchPaperIndex } from './paper-index-runtime';
+import { paperPixels } from './paper-registration';
+import { createTeachingTrace } from './teaching-timing';
 import './style.css';
-
-async function prefetchTeachingPage(sessionId, image) {
-  const form = new FormData();
-  form.append('image', image, 'paper.jpg');
-  const anchors = await recognizeHintAnchors(image);
-  if (anchors) form.append('local_text_anchors', JSON.stringify(anchors));
-  return api(`/v1/sessions/${sessionId}/page-prep`, { method: 'POST', body: form });
-}
 
 function selectSpeechAction(word, spoken) {
   window.dispatchEvent(new CustomEvent('paper-speech-choice', { detail: { word, spoken } }));
@@ -2778,6 +2773,7 @@ function SelectionBox({
   strokes,
   resetOnNextStroke,
   onChange,
+  onStrokeStart,
   onStrokeEnd,
   onHint,
   onCorrect,
@@ -2794,6 +2790,7 @@ function SelectionBox({
   const down = (event) => {
     if (gesture.current) return;
     if (event.target.closest('button')) return;
+    onStrokeStart?.(resetOnNextStroke);
     const origin = point(event);
     gesture.current = {
       pointerId: event.pointerId,
@@ -4066,6 +4063,87 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     [selection, setSelection] = useState(null);
   const [selectionStrokes, setSelectionStrokes] = useState([]);
   const [selectionConsumed, setSelectionConsumed] = useState(false);
+  const frozenSelectionRef = useRef(null);
+  const [selectionImage, setSelectionImage] = useState('');
+  const [selectionChoices, setSelectionChoices] = useState(null);
+  const pageIndexRef = useRef(null);
+  const pagePrefetchRef = useRef(null);
+  const clearFrozenSelection = () => {
+    const frozen = frozenSelectionRef.current;
+    frozenSelectionRef.current = null;
+    frozen?.controller.abort();
+    if (frozen?.url) URL.revokeObjectURL(frozen.url);
+    setSelectionImage('');
+    setSelectionChoices(null);
+  };
+  useEffect(() => {
+    clearFrozenSelection();
+    const work = pagePrefetchRef.current;
+    if (
+      stage !== 'active' ||
+      (work && (work.sid !== sessionId || work.revision !== cameraViewRevision.current))
+    ) {
+      pageIndexRef.current = null;
+      work?.controller.abort();
+      pagePrefetchRef.current = null;
+    }
+  }, [sessionId, selectedTask, cameraAngle, cameraKind, stage]);
+  useEffect(
+    () => () => {
+      pagePrefetchRef.current?.controller.abort();
+      if (frozenSelectionRef.current?.url) URL.revokeObjectURL(frozenSelectionRef.current.url);
+    },
+    [],
+  );
+  const prefetchTeachingPage = async (sid, image) => {
+    pagePrefetchRef.current?.controller.abort();
+    const work = { controller: new AbortController(), revision: cameraViewRevision.current, sid };
+    pagePrefetchRef.current = work;
+    const current = () =>
+      pagePrefetchRef.current === work &&
+      !work.controller.signal.aborted &&
+      cameraViewRevision.current === work.revision &&
+      hintScopeRef.current?.sessionId === sid &&
+      hintScopeRef.current?.stage === 'active';
+    const form = new FormData();
+    form.append('image', image, 'paper.jpg');
+    const localReading = recognizeHintAnchors(image, { signal: work.controller.signal });
+    // Start scanning immediately; optional on-device OCR must not hold this POST.
+    const prepared = await api(`/v1/sessions/${sid}/page-prep`, {
+      method: 'POST',
+      body: form,
+      signal: work.controller.signal,
+    });
+    if (!current() || !prepared.page_id) return prepared;
+    const path = `/v1/sessions/${sid}/page-prep/${prepared.page_id}`;
+    localReading
+      .then((anchors) => {
+        if (!current() || !anchors) return;
+        const body = new FormData();
+        body.append('local_text_anchors', JSON.stringify(anchors));
+        return api(`${path}/anchors`, { method: 'POST', body, signal: work.controller.signal });
+      })
+      .catch(() => {});
+    let pixels;
+    const loadFrame = async () => {
+      const frame = await privateImage(`${path}/image`, work.controller.signal);
+      pixels = await paperPixels(frame);
+      if (current() && work.latest) pageIndexRef.current = { ...work.latest, pixels };
+    };
+    const loading = loadFrame().catch(() => {});
+    streamApi(
+      `${path}/stream`,
+      new FormData(),
+      (event, data) => {
+        if (!current() || !['index', 'done'].includes(event)) return;
+        work.latest = data;
+        if (pixels) pageIndexRef.current = { ...data, pixels };
+      },
+      work.controller.signal,
+    ).catch(() => {});
+    await loading;
+    return prepared;
+  };
   const requestHintRef = useRef(null);
   const markHintRequestRef = useRef(null);
   const [hintTarget, setHintTarget] = useState(null);
@@ -4098,7 +4176,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   if (!penHintSchedulerRef.current) {
     penHintSchedulerRef.current = createPenHintScheduler((strokes, revision) => {
       requestHintRef.current?.(READING_QUESTION, '', '', strokes, revision);
-    });
+    }, 450);
   }
   useEffect(
     () => () => {
@@ -4855,6 +4933,35 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     source.assertFresh();
     return blob;
   };
+  const freezePenFrame = (reset = false) => {
+    if (frozenSelectionRef.current && !reset) return;
+    clearFrozenSelection();
+    const frame = {
+      revision: cameraViewRevision.current,
+      sessionId,
+      taskId: selectedTask,
+      startedAt: performance.now(),
+      controller: new AbortController(),
+    };
+    frozenSelectionRef.current = frame;
+    // capture() copies the video synchronously, before its first encoding await.
+    // The photograph remains fixed for all strokes in this selection.
+    frame.image = capture(false, false, null, 1800).then((image) => {
+      if (frozenSelectionRef.current !== frame) return image;
+      frame.url = URL.createObjectURL(image);
+      setSelectionImage(frame.url);
+      return image;
+    });
+    frame.image.catch(() => {
+      if (frozenSelectionRef.current === frame) clearFrozenSelection();
+    });
+  };
+  useEffect(() => {
+    if (stage !== 'active' || !stream || pagePrefetchRef.current) return;
+    capture(false, false, null, 1800)
+      .then((image) => prefetchTeachingPage(sessionId, image))
+      .catch(() => {});
+  }, [stage, stream, sessionId, cameraAngle, cameraKind]);
   const rotateCamera = async () => {
     if (
       cameraStarting ||
@@ -5512,7 +5619,13 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       paperVisible,
     };
   };
-  const newTeachingPlayback = (isCurrent, reveal, rate = 1, presentStep = (step) => ({ step })) => {
+  const newTeachingPlayback = (
+    isCurrent,
+    reveal,
+    rate = 1,
+    presentStep = (step) => ({ step }),
+    trace = null,
+  ) => {
     let utteranceGeneration = 0;
     return createTeachingPlayback({
       rate,
@@ -5533,6 +5646,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           if (started || !current()) return;
           started = true;
           reveal(step, index, repeat, presentation.paperVisible);
+          trace?.mark('visual_ready');
           resolveInk();
         };
         const abort = () => {
@@ -5541,10 +5655,22 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         };
         signal.addEventListener('abort', abort, { once: true });
         const prepared = queuedSpeech || prepareSpeech(presented.speech, signal, { rate });
+        // Showing the current reliable step does not depend on a TTS connection
+        // or its first audio packet. Future steps still wait in the paced queue.
+        startInk();
         try {
-          const spoken = speakAndWait(presented.speech, [], presented.speech, prepared, startInk, {
-            rate,
-          });
+          const spoken = speakAndWait(
+            presented.speech,
+            [],
+            presented.speech,
+            prepared,
+            () => {
+              trace?.mark('audio_started');
+            },
+            {
+              rate,
+            },
+          );
           const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches
             ? 0
             : teachingBeatDuration(presented);
@@ -5631,6 +5757,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     markedRevision = null,
     spokenReference = false,
     advance = false,
+    confirmedSelection = null,
   ) => {
     const acceptedOffer =
       candidateId && pendingHelpOffer.current?.id === candidateId ? pendingHelpOffer.current : null;
@@ -5663,6 +5790,47 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       (markedStrokes || selection) &&
       penSelectionReady(activeStrokes),
     );
+    let localSelection = null;
+    const penFrame = activeMark ? frozenSelectionRef.current : null;
+    if (
+      penFrame &&
+      penFrame.revision === cameraViewRevision.current &&
+      penFrame.sessionId === sessionId &&
+      penFrame.taskId === selectedTask
+    ) {
+      const selectionRevision = scheduler.revision();
+      const frame = await penFrame.image;
+      if (frozenSelectionRef.current !== penFrame || scheduler.revision() !== selectionRevision)
+        return;
+      penFrame.pixels ||= await paperPixels(frame);
+      const bound = await matchPaperIndex(
+        pageIndexRef.current,
+        penFrame.pixels,
+        activeStrokes,
+        penFrame.controller.signal,
+      );
+      if (frozenSelectionRef.current !== penFrame || scheduler.revision() !== selectionRevision)
+        return;
+      if (bound?.question) localSelection = bound;
+      else if (bound?.candidates.length > 1) {
+        const chosen = bound.candidates.find((item) => item.id === confirmedSelection);
+        if (!chosen) {
+          setSelectionChoices(bound.candidates);
+          return;
+        }
+        localSelection = {
+          ...bound,
+          question: chosen,
+          geometry: { ...bound.geometry, confirmed: true },
+        };
+      }
+      setSelectionChoices(null);
+      console.info('teaching_selection', {
+        method: localSelection?.method || 'fallback',
+        elapsed_ms: Math.round(performance.now() - penFrame.startedAt),
+        matched: Boolean(localSelection),
+      });
+    }
     const target =
       prompt || (lastHintSnapshot.current && lastHintPrompt.current) || READING_QUESTION;
     const reference = candidateId ? '' : parseLocatedQuestionReference(target);
@@ -5698,6 +5866,11 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       hintScopeRef.current.taskId === selectedTask &&
       cameraViewRevision.current === frameRevision;
     const inputDraft = questionInputOpen ? question : null;
+    const trace = createTeachingTrace({
+      startedAt: penFrame?.penUpAt,
+      emit: (detail) => window.dispatchEvent(new CustomEvent('paper-teaching-timing', { detail })),
+    });
+    trace.mark('selection_ready', { cached: Boolean(localSelection?.question) });
     let playback;
     try {
       autoReply.cancel();
@@ -5748,13 +5921,21 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       if (uncertainSpokenNumber) form.append('spoken_reference', 'true');
       if (candidateId) form.append('candidate_id', candidateId);
       if (manualSelection) form.append('selected_strokes', JSON.stringify(inkStrokes));
+      if (manualSelection && localSelection?.question) {
+        form.append('prepared_question_id', localSelection.question.id);
+        form.append('prepared_geometry', JSON.stringify(localSelection.geometry));
+      }
       if (selectedTask) form.append('task_id', selectedTask);
       const hintFrame =
-        frozen?.image || acceptedOffer?.image || (await capture(false, true, null, 1800));
+        frozen?.image ||
+        acceptedOffer?.image ||
+        (manualSelection && penFrame
+          ? await penFrame.image
+          : await capture(false, true, null, 1800));
       if (!isCurrent() || (manualSelection && scheduler.revision() !== selectionRevision)) return;
       const localAnchors = frozen
         ? frozen.localAnchors
-        : acceptedOffer?.reading || dashboard.page_preparation?.inventory_ready
+        : acceptedOffer?.reading || localSelection?.question
           ? null
           : await recognizeHintAnchors(hintFrame, {
               signal: markController.signal,
@@ -5780,9 +5961,10 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
           }),
         );
       updateTarget({
-        box: frozen?.box,
-        label: frozen?.label || reference,
+        box: frozen?.box || localSelection?.question?.box,
+        label: frozen?.label || localSelection?.question?.label || reference,
         textAnchors: localAnchors?.anchors || [],
+        selectionStrokes: inkStrokes,
       });
       playback = newTeachingPlayback(
         isCurrent,
@@ -5804,6 +5986,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         },
         1,
         (step, index) => presentTeachingPrefix([...visibleSteps.slice(0, index), step], imageUrl()),
+        trace,
       );
       teachingPlaybackRef.current = playback;
       const enqueueBeat = (data) => {
@@ -5811,6 +5994,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         if (data.reading_key) readingKeys.add(data.reading_key);
         setHintPreparationLabel('');
         streamedBeats.push(data);
+        trace.mark(data.phase === 'reading' ? 'reading_ready' : 'explanation_ready');
         streamedSentences++;
         playback.enqueue(
           splitTeachingBeat(data, {
@@ -5834,11 +6018,17 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             return;
           }
           if (event === 'target' && data.box) {
+            trace.mark('target_ready', { cached: Boolean(data.question_id) });
             updateTarget({
               box: data.box,
               label: data.label || reference,
               cue: null,
             });
+            if (
+              localSelection?.question?.id === data.question_id &&
+              localSelection.question.reading
+            )
+              enqueueBeat(localSelection.question.reading);
           }
           if (event === 'visual') {
             pendingVisual.push(data);
@@ -5882,6 +6072,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         setSelectionConsumed(true);
         setSelection(null);
         setSelectionStrokes([]);
+        clearFrozenSelection();
       }
       lastHintPrompt.current = target;
       lastHintSpokenReference.current = uncertainSpokenNumber;
@@ -5985,6 +6176,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   };
   requestHintRef.current = requestHint;
   const exitTeaching = () => {
+    clearFrozenSelection();
     hintContextRef.current.invalidate();
     markHintRequestRef.current?.abort();
     markHintRequestRef.current = null;
@@ -7620,6 +7812,9 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                     beatIndex={reviewBeat}
                     playbackVersion={hintTarget.playbackVersion}
                   />
+                  {hintTarget.selectionStrokes?.length > 0 && (
+                    <SelectionInk strokes={hintTarget.selectionStrokes} />
+                  )}
                   {showTeachingMarks && hintTarget.cue && !hintTarget.beats?.length && (
                     <div
                       className={`hint-visual-cue ${hintTarget.cue.kind}`}
@@ -7636,36 +7831,88 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 </TeachingPaperFrame>
               )}
               {stage === 'active' && !teachingVisible && !cameraPreviewFullscreen && (
-                <SelectionBox
-                  selection={selection}
-                  strokes={selectionStrokes}
-                  resetOnNextStroke={selectionConsumed}
-                  onChange={(box, strokes) => {
-                    if (teachingMode !== 'idle') exitTeaching();
-                    saveQuestionGuidance(null);
-                    penHintSchedulerRef.current.change();
-                    markHintRequestRef.current?.abort();
-                    setSelection(box);
-                    setSelectionStrokes(strokes);
-                    setSelectionConsumed(false);
-                    setHintTarget(null);
-                  }}
-                  onStrokeEnd={(strokes) => {
-                    if (!questionInputOpen && !batchOpen && !correctionOpen && !voiceCall)
-                      penHintSchedulerRef.current.finish(strokes);
-                  }}
-                  onHint={() => {
-                    if (hintBusy && markHintRequestRef.current) return;
-                    penHintSchedulerRef.current.cancel();
-                    requestHint(READING_QUESTION);
-                  }}
-                  onCorrect={() => {
-                    penHintSchedulerRef.current.cancel();
-                    markHintRequestRef.current?.abort();
-                    requestSelectedCorrection();
-                  }}
-                  disabled={hintBusy || batchSubmitting || selectedCaptureBusy}
-                />
+                <>
+                  {selectionImage && (
+                    <img
+                      className="selection-snapshot"
+                      src={selectionImage}
+                      alt="圈画时固定的作业画面"
+                    />
+                  )}
+                  <SelectionBox
+                    selection={selection}
+                    strokes={selectionStrokes}
+                    resetOnNextStroke={selectionConsumed}
+                    onStrokeStart={freezePenFrame}
+                    onChange={(box, strokes) => {
+                      if (teachingMode !== 'idle') exitTeaching();
+                      saveQuestionGuidance(null);
+                      penHintSchedulerRef.current.change();
+                      markHintRequestRef.current?.abort();
+                      setSelection(box);
+                      setSelectionStrokes(strokes);
+                      setSelectionConsumed(false);
+                      setHintTarget(null);
+                      setSelectionChoices(null);
+                      if (!strokes.length) clearFrozenSelection();
+                    }}
+                    onStrokeEnd={(strokes) => {
+                      if (frozenSelectionRef.current)
+                        frozenSelectionRef.current.penUpAt = performance.now();
+                      if (!questionInputOpen && !batchOpen && !correctionOpen && !voiceCall)
+                        penHintSchedulerRef.current.finish(strokes);
+                    }}
+                    onHint={() => {
+                      if (hintBusy && markHintRequestRef.current) return;
+                      penHintSchedulerRef.current.cancel();
+                      requestHint(READING_QUESTION);
+                    }}
+                    onCorrect={() => {
+                      penHintSchedulerRef.current.cancel();
+                      markHintRequestRef.current?.abort();
+                      requestSelectedCorrection();
+                    }}
+                    disabled={hintBusy || batchSubmitting || selectedCaptureBusy}
+                  />
+                  {selectionChoices && (
+                    <div
+                      className="selection-question-choice"
+                      role="group"
+                      aria-label="请选择圈画的题目"
+                    >
+                      <span>你想看哪一道？</span>
+                      {selectionChoices.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() =>
+                            requestHint(
+                              READING_QUESTION,
+                              '',
+                              '',
+                              selectionStrokes,
+                              null,
+                              false,
+                              false,
+                              item.id,
+                            )
+                          }
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                      <button
+                        className="quiet"
+                        onClick={() => {
+                          clearFrozenSelection();
+                          setSelection(null);
+                          setSelectionStrokes([]);
+                        }}
+                      >
+                        重新圈画
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               {annotation.length > 1 && (
                 <svg

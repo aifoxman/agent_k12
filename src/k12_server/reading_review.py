@@ -56,6 +56,6 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     if not beat:
         return None
     identity = json.dumps([question.get("id"), question["label"], question["evidence"],
-                           question["box"], reading["conditions"], reading["ask"]], ensure_ascii=False)
+                           reading["conditions"], reading["ask"]], ensure_ascii=False)
     beat.update(phase="reading", reading_key=hashlib.sha256(identity.encode()).hexdigest())
     return beat

@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS prepared_questions (
   ordinal INTEGER NOT NULL, path_json TEXT NOT NULL, label TEXT NOT NULL,
   evidence TEXT NOT NULL, box_json TEXT NOT NULL, progress TEXT NOT NULL,
   read_confidence REAL NOT NULL, solution_json TEXT, solve_confidence REAL,
-  verification_status TEXT NOT NULL DEFAULT 'pending', reading_json TEXT,
+  verification_status TEXT NOT NULL DEFAULT 'pending', reading_json TEXT, regions_json TEXT,
   UNIQUE(page_id,ordinal)
 );
 CREATE INDEX IF NOT EXISTS prepared_questions_page ON prepared_questions(page_id,ordinal);
@@ -191,6 +191,8 @@ def initialize(path: str) -> None:
         question_columns = {row["name"] for row in connection.execute("PRAGMA table_info(prepared_questions)")}
         if "reading_json" not in question_columns:
             connection.execute("ALTER TABLE prepared_questions ADD COLUMN reading_json TEXT")
+        if "regions_json" not in question_columns:
+            connection.execute("ALTER TABLE prepared_questions ADD COLUMN regions_json TEXT")
         ai_preference_columns = {row["name"] for row in connection.execute(
             "PRAGMA table_info(family_ai_preferences)")}
         if "grading_model" not in ai_preference_columns:

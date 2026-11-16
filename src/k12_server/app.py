@@ -1556,6 +1556,69 @@ def prepare_session_page(session_id: str, image: UploadFile = File(...),
     return page_preparation().schedule(session_id, family["id"], image_bytes)
 
 
+def _child_page_index(session_id: str, page_id: str, claims: dict):
+    require_role(claims, "child")
+    family = family_for(claims)
+    session = family_session(session_id, family["id"])
+    if session["status"] != "active" or session["device_id"] != claims["sub"]:
+        raise HTTPException(409, "Session is not active on this device")
+    snapshot = page_preparation().index(session_id, family["id"], page_id)
+    if not snapshot:
+        raise HTTPException(409, "纸面索引已变化，请重新扫描")
+    return snapshot
+
+
+@app.get("/v1/sessions/{session_id}/page-prep/{page_id}/image")
+def prepared_page_image(session_id: str, page_id: str, claims: dict = Depends(principal)):
+    _child_page_index(session_id, page_id, claims)
+    with page_preparation().lock:
+        image = page_preparation().frames.get(page_id)
+    if not image:
+        raise HTTPException(409, "纸面缓存已释放，请重新扫描")
+    return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/sessions/{session_id}/page-prep/{page_id}/stream")
+def stream_prepared_page(session_id: str, page_id: str, claims: dict = Depends(principal)):
+    _child_page_index(session_id, page_id, claims)
+
+    def events():
+        started, previous, completed_at = time.monotonic(), None, None
+        while time.monotonic() - started < 120:
+            try:
+                snapshot = _child_page_index(session_id, page_id, claims)
+            except HTTPException:
+                yield _hint_event("error", {"detail": "纸面或作业状态已变化"})
+                return
+            signature = json.dumps(snapshot, ensure_ascii=False)
+            if signature != previous:
+                yield _hint_event("index", snapshot)
+                previous = signature
+            if snapshot["index_complete"]:
+                completed_at = completed_at or time.monotonic()
+                if (all(q["anchors_ready"] for q in snapshot["questions"])
+                        or time.monotonic() - completed_at >= 30):
+                    yield _hint_event("done", snapshot)
+                    return
+            time.sleep(.75)
+        yield _hint_event("done", snapshot)
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.post("/v1/sessions/{session_id}/page-prep/{page_id}/anchors")
+def add_prepared_anchors(session_id: str, page_id: str,
+                          local_text_anchors: str = Form(..., max_length=65536),
+                          claims: dict = Depends(principal)):
+    _child_page_index(session_id, page_id, claims)
+    try:
+        accepted = page_preparation().add_local_reading(page_id, local_text_anchors)
+    except (OSError, ValueError, KeyError, TypeError):
+        raise HTTPException(422, "无效的本地读题坐标")
+    return {"accepted": accepted}
+
+
 @app.patch("/v1/sessions/{session_id}/timer")
 def update_timer_goal(session_id: str, body: TimerGoal,
                       claims: dict = Depends(principal)) -> dict:
@@ -2541,7 +2604,8 @@ def _refresh_teaching_solution(session_id: str, family: dict, image: bytes,
     wait = (min(45, settings.ai_timeout_seconds) if (
         wait_for_pending and target.get("verification_status") == "pending"
         and (complete or student_thought.strip())) else 0)
-    updated = reader(session_id, family["id"], image, target["id"], wait_seconds=wait)
+    updated = reader(session_id, family["id"], target.get("_prepared_image", image),
+                     target["id"], wait_seconds=wait)
     if not updated:
         raise HTTPException(409, "纸面或作业状态已变化，请重新选择当前题目")
     # A request may already own one checked on-demand solve when no shared job
@@ -2627,6 +2691,8 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 level: int = Form(1, ge=1, le=3),
                 candidate_id: str | None = Form(None), selected_region: bool = Form(False),
                 selected_strokes: str | None = Form(None),
+                prepared_question_id: str | None = Form(None, max_length=64),
+                prepared_geometry: str | None = Form(None, max_length=2048),
                 spoken_reference: bool = Form(False),
                 student_thought: str | None = Form(None),
                 previous_hint: str | None = Form(None),
@@ -2658,6 +2724,13 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
     anchor_state: dict = {"local_text_payload": local_text_anchors}
     trace_id = secrets.token_hex(8)
     cached = continued
+    if prepared_question_id and prepared_geometry and selected_strokes and not continued:
+        try:
+            cached = page_preparation().bind_selection(
+                session_id, family["id"], image_bytes, prepared_question_id,
+                json.loads(prepared_geometry), parse_selected_strokes(selected_strokes))
+        except (OSError, ValueError, KeyError, TypeError):
+            cached = None
     if not continued and not (candidate_id or selected_region or selected_strokes is not None):
         try:
             cached = page_preparation().match(
@@ -2680,7 +2753,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                               else "正在准备这道题的讲解…")})
         target_item = (cached if cached and cached["read_confidence"] >= .75 and
                        cached.get("progress") != "occluded" else None)
-        if candidate_id or selected_strokes is not None:
+        if candidate_id or selected_strokes is not None and not target_item:
             try:
                 locator_settings = replace(settings, ai_model=preferences(
                     settings.database_path, family["id"])["locator_model"])
@@ -2788,6 +2861,9 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     db.execute("DELETE FROM help_candidates WHERE id=?", (candidate_id,))
             return result
         if target_item:
+            prioritize = getattr(page_preparation(), "prioritize", None)
+            if callable(prioritize):
+                prioritize(session_id, family["id"], target_item)
             logger.info("hint_target_ready session=%s cached=%s elapsed_ms=%d",
                         session_id, bool(target_item.get("id")),
                         round((time.monotonic() - request_started) * 1000))
@@ -2795,7 +2871,31 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                          "label": target_item["label"],
                                          "question_id": target_item.get("id"),
                                          "teaching_tier": level})
-            if level == 1 and not student_thought and not previous_hint_id:
+            anchor_future = None
+
+            def read_anchors_in_parallel():
+                with teaching_call_context(family["id"], trace_id):
+                    item = dict(target_item)
+                    intro = reading_review(item, image_bytes)
+                    if intro:
+                        item["anchors"] = [*(item.get("anchors") or []), *[
+                            {"id": mark["anchor_id"], "text": mark["text"],
+                             "box": mark["box"], "confidence": .9} for mark in intro["page"]]]
+                    return _teaching_anchors(image_bytes, item, anchor_state,
+                                             family["id"], question)
+
+            annotation_pool = getattr(page_preparation(), "annotations", None)
+            if annotation_pool:
+                anchor_future = annotation_pool.submit(read_anchors_in_parallel)
+
+            def with_anchors(item):
+                if anchor_future is None:
+                    return _teaching_anchors(image_bytes, item, anchor_state, family["id"], question)
+                annotated = anchor_future.result()
+                return {**item, "anchors": annotated.get("anchors", []),
+                        "_teaching_anchor_image_key": annotated.get("_teaching_anchor_image_key")}
+
+            if not student_thought and not previous_hint_id:
                 intro = reading_review(target_item, image_bytes)
                 if intro:
                     reading_beats.append(intro)
@@ -2848,7 +2948,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     return
             solution = target_item.get("solution") or {"answer": "", "steps": ""}
             if _teaching_solution_ready(target_item):
-                target_item = _teaching_anchors(image_bytes, target_item, anchor_state, family["id"], question)
+                target_item = with_anchors(target_item)
                 try:
                     target_item = _refresh_teaching_solution(
                         session_id, family, image_bytes, target_item, question, student_thought or "", level=level)
@@ -2896,7 +2996,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             text_beats = []
             try:
                 crop, region = focus_question_image(image_bytes, target_item["box"])
-                target_item = _teaching_anchors(image_bytes, target_item, anchor_state, family["id"], question)
+                target_item = with_anchors(target_item)
                 target_item = _refresh_teaching_solution(
                     session_id, family, image_bytes, target_item, question, student_thought or "", level=level)
                 solution = target_item.get("solution") or {"answer": "", "steps": ""}

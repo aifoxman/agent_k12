@@ -204,7 +204,12 @@ class _Ink:
         right, bottom = min(self.width, math.ceil((x + w) * self.width)), min(self.height, math.ceil((y + h) * self.height))
         if right - left < 3 or bottom - top < 3:
             return None
-        crop = self.image.crop((left, top, right, bottom))
+        # OCR/model boxes may sit exactly on a glyph's antialiasing edge.
+        # Inspect a two-pixel quiet margin, without moving the named anchor.
+        # A genuinely clipped glyph still continues through this margin and is
+        # rejected; we never snap the name onto a neighbouring ink component.
+        crop = self.image.crop((max(0, left - 2), max(0, top - 2),
+                                min(self.width, right + 2), min(self.height, bottom + 2)))
         window = min(31, max(5, 2 * round(min(crop.size) * .4) + 1))
         paper = crop.filter(ImageFilter.MaxFilter(window)).load()
         pixels = crop.load()

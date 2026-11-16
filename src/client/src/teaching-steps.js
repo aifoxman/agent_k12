@@ -123,11 +123,21 @@ export function splitTeachingBeat(
   const diagramStep = speech.findIndex((part) => /示意|画|如图|看这个|看这幅|分成/u.test(part));
   for (const element of beat.scratch || []) {
     // A diagram and its labels remain one coherent picture. Explanatory prose
-    // can follow an exact spoken phrase; an unmatched result waits until last.
+    // can follow an exact spoken phrase. A thinking reminder is useful from
+    // the start; an unmatched calculation or conclusion still waits until last.
     const match =
       element.kind === 'text' && element.role === 'prose' ? findTextStep(element.text) : -1;
+    const thinking =
+      element.role === 'prose' &&
+      !/结果|答案|得数|最后|合计|一共|[=＝\d]/u.test(element.text || '');
     const index =
-      match >= 0 ? match : element.role !== 'prose' && diagramStep >= 0 ? diagramStep : last;
+      match >= 0
+        ? match
+        : thinking
+          ? 0
+          : element.role !== 'prose' && diagramStep >= 0
+            ? diagramStep
+            : last;
     steps[index].scratch.push(element);
   }
   return steps;

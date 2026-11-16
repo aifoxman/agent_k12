@@ -1664,7 +1664,7 @@ def test_page_preparation_prioritizes_current_then_invalidates_on_parent_change(
     import k12_server.page_prep as prep
 
     inventory_calls, solved = [], []
-    def inventory(_settings, _image, previous=None):
+    def inventory(_settings, _image, previous=None, on_question=None):
         inventory_calls.append(1)
         if previous is not None:
             assert len(previous) == 4 and "progress" not in previous[0]

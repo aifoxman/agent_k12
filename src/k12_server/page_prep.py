@@ -20,11 +20,13 @@ from PIL import Image
 
 from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box,
                  parse_model_json, post_model, read_teaching_anchors, set_usage_family,
-                 tight_teaching_anchor_image)
+                 tight_teaching_anchor_image, stream_model)
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
 from .reading_review import normalize_reading
+from .paper_registration import IDENTITY, map_box, stroke_scores, valid_transform
+from .reading_review import reading_review
 
 logger = logging.getLogger(__name__)
 ALLOWED_MODELS = ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna")
@@ -106,7 +108,7 @@ def _image_part(image: bytes) -> dict:
 
 
 def inventory_page(settings: Settings, image: bytes,
-                   previous: list[dict] | None = None) -> list[dict]:
+                   previous: list[dict] | None = None, on_question=None) -> list[dict]:
     instruction = (
         "通读照片中的全部可读作业，先分左右页、栏和题组，再按各页实际阅读顺序列出最小可独立求助的小题。"
         "印刷题号须保留父子层级，例如 ['二','3','（1）']；不要逐行横跳混读双页。"
@@ -122,7 +124,13 @@ def inventory_page(settings: Settings, image: bytes,
         "每题最多4个简短条件、一个所求、4个短词锚点；锚点紧贴原文，不框整题，坐标相对整图。"
         "无法可靠摘录时reading=null，不为填字段编造。"
         "box 是相对整图的归一化坐标，最多 60 道，不返回不可读题。"
+        "box包括本题题干和原图；另用answer_regions列出本题确实可见的答题空白区域，"
+        "每个区域也是[x,y,w,h]，最多4个；不要包含下一题、其他题或整页，不确定则[]。"
     )
+    if on_question:
+        instruction += ("本次采用JSONL流：每识别完一道题立刻输出一个完整JSON对象并换行，"
+                        "对象就是questions数组中的单题字段，不要questions外壳、Markdown或总括行。"
+                        "先输出题干、读题和原文锚点，不等待解法。")
     prior_text = ""
     if previous:
         anchors = previous[::max(1, (len(previous) + 19) // 20)][:20]
@@ -139,18 +147,24 @@ def inventory_page(settings: Settings, image: bytes,
                        _image_part(image),
                    ]},
                ]}
-    raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])
     found = []
-    for item in (raw.get("questions") or [])[:60]:
+
+    def accept(item):
         if not isinstance(item, dict):
-            continue
+            return
+        if isinstance(item.get("questions"), list):
+            for child in item["questions"][:60 - len(found)]:
+                accept(child)
+            return
         box = normalized_box(item.get("box"))
         path = item.get("path")
         evidence = str(item.get("evidence") or "").strip()[:1200]
         confidence = bounded_confidence(item.get("confidence"))
         if (not box or not isinstance(path, list) or not path or
                 confidence < .65 or len(evidence) < 4):
-            continue
+            return
+        if any(entry["path"] == [str(part).strip()[:40] for part in path[:5]] for entry in found):
+            return
         progress = item.get("progress")
         found.append({
             "path": [str(part).strip()[:40] for part in path[:5]],
@@ -160,8 +174,45 @@ def inventory_page(settings: Settings, image: bytes,
             "progress": progress if progress in {"done", "partial", "blank", "occluded"}
             else "occluded",
             "confidence": confidence,
+            "answer_regions": [region for value in (item.get("answer_regions") or [])[:4]
+                               if (region := normalized_box(value))],
         })
         found[-1]["reading"] = normalize_reading(item.get("reading"), found[-1], image)
+        if on_question:
+            on_question(found[-1], len(found) - 1)
+
+    if on_question:
+        payload.pop("response_format", None)
+        buffer = ""
+        for delta in stream_model(settings, payload):
+            buffer += delta
+            if len(buffer) > 200_000:
+                raise ValueError("Question index exceeds limit")
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                try:
+                    accept(parse_model_json(line))
+                except (ValueError, KeyError, TypeError):
+                    pass
+                if len(found) >= 60:
+                    return found
+        if buffer.strip():
+            try:
+                accept(parse_model_json(buffer))
+            except (ValueError, KeyError, TypeError):
+                pass
+        if found:
+            return found
+        # Compatibility for providers that ignore JSONL; a complete ordinary
+        # response is still useful, but never publish a partially parsed object.
+        try:
+            raw = parse_model_json(buffer)
+        except ValueError:
+            raw = {}
+    else:
+        raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])
+    for item in (raw.get("questions") or [])[:60]:
+        accept(item)
     return found
 
 
@@ -378,6 +429,8 @@ class PagePreparation:
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-index")
         self.solvers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-solve")
         self.readers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="page-read")
+        self.foreground = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hint-solve")
+        self.annotations = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hint-anchors")
         self.lock = Lock()
         self.inflight: set[str] = set()
         self.inventory_jobs: set[str] = set()
@@ -385,19 +438,27 @@ class PagePreparation:
         self.question_futures: dict[tuple[str, int], Future] = {}
         self.last_refresh: dict[str, float] = {}
         self.reading_attempted: set[tuple[str, int]] = set()
+        self.frames: dict[str, bytes] = {}
+        self.local_payloads: dict[str, str] = {}
+        self.indexed: set[str] = set()
+        self.foreground_jobs: set[tuple[str, int]] = set()
+        self.running_questions: set[tuple[str, int]] = set()
 
     def close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.solvers.shutdown(wait=False, cancel_futures=True)
         self.readers.shutdown(wait=False, cancel_futures=True)
+        self.foreground.shutdown(wait=False, cancel_futures=True)
+        self.annotations.shutdown(wait=False, cancel_futures=True)
 
     def _queue_reading_marks(self, page_id: str, session_id: str, family_id: str,
                              image: bytes, questions: list[dict], config: dict,
-                             priority: list[int] | None = None) -> None:
+                             priority: list[int] | None = None, *, base_ordinal: int = 0) -> None:
         if not self.settings.ai_api_url or not self.settings.ai_api_key:
             return
-        for ordinal in priority if priority is not None else range(len(questions)):
-            item = questions[ordinal]
+        for index in priority if priority is not None else range(len(questions)):
+            ordinal = index + base_ordinal
+            item = questions[index]
             reading = item.get("reading")
             if (not reading or reading.get("anchors") or item["confidence"] < .85
                     or item["progress"] == "occluded"):
@@ -461,6 +522,7 @@ class PagePreparation:
                     still_running = page["id"] in self.inflight
                 if (page["model_version"] != config["version"] or
                         not same_paper(page["fingerprint"], fingerprint) or
+                        page["id"] not in self.frames or
                         page["status"] == "preparing" and not still_running):
                     continue
                 if page["status"] == "ready":
@@ -500,6 +562,15 @@ class PagePreparation:
         with self.lock:
             self.inflight.add(page_id)
             self.last_refresh[page_id] = time.monotonic()
+            self.frames[page_id] = image
+            # Images stay only in bounded process memory, never in the index
+            # response or a public asset directory. A restart requires rescan.
+            for old in list(self.frames):
+                if len(self.frames) <= 12:
+                    break
+                if old not in self.inflight:
+                    self.frames.pop(old, None)
+                    self.local_payloads.pop(old, None)
         self.executor.submit(self._prepare, page_id, session_id, family_id, image, config, local_text_anchors)
         return {"status": "preparing", "page_id": page_id,
                 "inventory_ready": False, "total": 0, "prepared": 0}
@@ -518,6 +589,14 @@ class PagePreparation:
                           image: bytes, config: dict, local_text_anchors: str | None = None) -> None:
         set_usage_family(family_id)
         try:
+            # Geometry already downloaded by the child is immutable. A moved
+            # photograph gets its own index rather than silently changing it.
+            with self.lock:
+                original = self.frames.get(page_id)
+            if original and original != image:
+                self.schedule(session_id, family_id, image, force=True,
+                              local_text_anchors=local_text_anchors)
+                return
             with connect(self.settings.database_path) as db:
                 page = db.execute("SELECT status,model_version FROM page_preparations WHERE id=? "
                                   "AND session_id=?", (page_id, session_id)).fetchone()
@@ -592,7 +671,25 @@ class PagePreparation:
                     (family_id, config["version"], int(time.time()))).fetchall()
             prior = next((json.loads(row["inventory_json"]) for row in prior_pages
                           if same_paper(row["fingerprint"], image_fingerprint(image))), None)
-            questions = inventory_page(locator, image, prior) if prior else inventory_page(locator, image)
+            def publish(item, ordinal):
+                if not self._current(session_id, page_id):
+                    raise ValueError("Page scan superseded")
+                attach_reading_anchors([item], image, local_text_anchors or self.local_payloads.get(page_id))
+                with transaction(self.settings.database_path) as db:
+                    db.execute(
+                        "INSERT INTO prepared_questions(id,page_id,ordinal,path_json,label,evidence,"
+                        "box_json,progress,read_confidence,reading_json,regions_json) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(page_id,ordinal) DO NOTHING",
+                        (uuid.uuid4().hex, page_id, ordinal, json.dumps(item["path"]), item["label"],
+                         item["evidence"], json.dumps(item["box"]), item["progress"], item["confidence"],
+                         json.dumps(item.get("reading"), ensure_ascii=False),
+                         json.dumps(item.get("answer_regions", []))))
+                logger.info("page_question_reading_ready session=%s ordinal=%d elapsed_ms=%d",
+                            session_id, ordinal, round((time.monotonic() - started) * 1000))
+                self._queue_reading_marks(page_id, session_id, family_id, image, [item], config,
+                                          base_ordinal=ordinal)
+
+            questions = inventory_page(locator, image, prior, publish)
             attach_reading_anchors(questions, image, local_text_anchors)
             if not self._current(session_id, page_id):
                 return
@@ -626,7 +723,12 @@ class PagePreparation:
                     db.execute(
                         "INSERT INTO prepared_questions(id,page_id,ordinal,path_json,label,evidence,"
                         "box_json,progress,read_confidence,solution_json,solve_confidence,"
-                        "verification_status,reading_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "verification_status,reading_json,regions_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(page_id,ordinal) DO UPDATE SET "
+                        "solution_json=COALESCE(prepared_questions.solution_json,excluded.solution_json),"
+                        "solve_confidence=COALESCE(prepared_questions.solve_confidence,excluded.solve_confidence),"
+                        "verification_status=CASE WHEN prepared_questions.verification_status='pending' "
+                        "THEN excluded.verification_status ELSE prepared_questions.verification_status END",
                         (uuid.uuid4().hex, page_id, ordinal, json.dumps(item["path"], ensure_ascii=False),
                          item["label"], item["evidence"], json.dumps(item["box"]),
                          item["progress"], item["confidence"],
@@ -634,8 +736,11 @@ class PagePreparation:
                          previous["solve_confidence"] if usable else None,
                          previous["verification_status"] if usable else
                          "uncertain" if item["progress"] == "occluded" else "pending",
-                         json.dumps(item.get("reading"), ensure_ascii=False)),
+                         json.dumps(item.get("reading"), ensure_ascii=False),
+                         json.dumps(item.get("answer_regions", []))),
                     )
+            with self.lock:
+                self.indexed.add(page_id)
             logger.info("page_inventory_ready session=%s total=%d reused=%d elapsed_ms=%d",
                         session_id, len(questions), reused,
                         round((time.monotonic() - started) * 1000))
@@ -648,13 +753,13 @@ class PagePreparation:
             # solver. Current unfinished questions still receive priority.
             self._queue_reading_marks(page_id, session_id, family_id, image,
                                       questions, config, priority)
-            pending = [ordinal for ordinal in priority
-                       if questions[ordinal]["progress"] != "occluded" and
-                       question_keys_for_page[ordinal] not in cached]
-            # A previously cached but low-confidence reading must be solved anew.
-            pending.extend(ordinal for ordinal in priority if ordinal not in pending and
-                           questions[ordinal]["progress"] != "occluded" and
-                           questions[ordinal]["confidence"] < .85)
+            with connect(self.settings.database_path) as db:
+                needs_solve = {row["ordinal"] for row in db.execute(
+                    "SELECT ordinal FROM prepared_questions WHERE page_id=? "
+                    "AND verification_status='pending' AND progress!='occluded'", (page_id,))}
+            with self.lock:
+                pending = [ordinal for ordinal in priority if ordinal in needs_solve
+                           and (page_id, ordinal) not in self.foreground_jobs]
             if not pending:
                 self._finish_page(page_id)
                 return
@@ -671,6 +776,10 @@ class PagePreparation:
                                 question_keys_for_page[pending[0]])
                 for ordinal in pending[1:]:
                     key = (page_id, ordinal)
+                    with self.lock:
+                        if key in self.foreground_jobs:
+                            launched.add(key)
+                            continue
                     future = self.solvers.submit(
                         self._solve_one, page_id, session_id, family_id,
                         image, config, solver, questions[ordinal], ordinal,
@@ -699,8 +808,13 @@ class PagePreparation:
                 if (not row or row["status"] != "preparing"
                         or not any(owner == page_id for owner, _ in self.question_jobs)):
                     self.inflight.discard(page_id)
+            if row and row["status"] == "preparing":
+                self._finish_page(page_id)
 
     def _finish_page(self, page_id: str) -> None:
+        with self.lock:
+            if page_id in self.inventory_jobs and page_id not in self.indexed:
+                return
         with transaction(self.settings.database_path) as db:
             pending = db.execute("SELECT 1 FROM prepared_questions WHERE page_id=? "
                                  "AND verification_status='pending' LIMIT 1", (page_id,)).fetchone()
@@ -716,6 +830,9 @@ class PagePreparation:
                    page_key: str, question_key: str) -> None:
         key = (page_id, ordinal)
         with self.lock:
+            if key in self.running_questions:
+                return
+            self.running_questions.add(key)
             self.question_jobs.add(key)
         set_usage_family(family_id)
         started = time.monotonic()
@@ -740,7 +857,7 @@ class PagePreparation:
                            "verification_status=? WHERE page_id=? AND ordinal=?",
                            (json.dumps(result, ensure_ascii=False), result["confidence"],
                             status, page_id, ordinal))
-                if status in {"verified", "rechecked"} and result["confidence"] >= .85:
+                if page_key and status in {"verified", "rechecked"} and result["confidence"] >= .85:
                     now = int(time.time())
                     db.execute("INSERT INTO family_question_cache VALUES(?,?,?,?,?,?,?,?,?,?) "
                                "ON CONFLICT(family_id,page_key,question_key,model_version,solver_model) "
@@ -769,6 +886,8 @@ class PagePreparation:
         with self.lock:
             self.question_jobs.discard(key)
             self.question_futures.pop(key, None)
+            self.foreground_jobs.discard(key)
+            self.running_questions.discard(key)
             if key[0] not in self.inventory_jobs and not any(page_id == key[0] for page_id, _ in self.question_jobs):
                 self.inflight.discard(key[0])
 
@@ -830,7 +949,7 @@ class PagePreparation:
             item["solution"] = json.loads(item["solution_json"]) if item["solution_json"] else None
             with self.lock:
                 running = ((item["page_id"], item["ordinal"]) in self.question_jobs
-                           or item["page_id"] in self.inventory_jobs)
+                           )
             item["_solution_inflight"] = bool(
                 running and item["page_status"] == "preparing"
                 and item["verification_status"] == "pending")
@@ -838,6 +957,122 @@ class PagePreparation:
             if not item["_solution_inflight"] or remaining <= 0:
                 return item
             time.sleep(min(.2, remaining))
+
+    def index(self, session_id: str, family_id: str, page_id: str) -> dict | None:
+        """Child-safe index: reading and positions, never cached solution data."""
+        with connect(self.settings.database_path) as db:
+            page = db.execute(
+                "SELECT p.* FROM page_preparations p JOIN sessions s ON s.id=p.session_id "
+                "WHERE p.id=? AND p.session_id=? AND s.family_id=? AND s.status='active'",
+                (page_id, session_id, family_id)).fetchone()
+            rows = db.execute("SELECT * FROM prepared_questions WHERE page_id=? ORDER BY ordinal",
+                              (page_id,)).fetchall() if page else []
+        with self.lock:
+            frame = self.frames.get(page_id)
+        if (not page or not frame or page["expires_at"] <= time.time()
+                or page["status"] not in {"preparing", "ready"}
+                or page["model_version"] != preferences(self.settings.database_path, family_id)["version"]):
+            return None
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["box"] = json.loads(item["box_json"])
+            intro = reading_review(item, frame)
+            items.append({"id": item["id"], "label": item["label"], "box": item["box"],
+                          "path": json.loads(item["path_json"]), "progress": item["progress"],
+                          "read_confidence": item["read_confidence"],
+                          "answer_regions": json.loads(item["regions_json"] or "[]"),
+                          "reading": intro, "reading_ready": bool(intro),
+                          "anchors_ready": bool(intro and intro["page"]),
+                          "solution_ready": item["verification_status"] in {"verified", "rechecked"}})
+        return {"page_id": page_id, "frame_sha256": hashlib.sha256(frame).hexdigest(),
+                "status": page["status"], "questions": items,
+                "index_complete": page_id in self.indexed or page["status"] == "ready"}
+
+    def add_local_reading(self, page_id: str, payload: str) -> int:
+        with self.lock:
+            frame = self.frames.get(page_id)
+        data = json.loads(payload)
+        if not frame or data.get("image_sha256") != hashlib.sha256(frame).hexdigest():
+            return 0
+        with self.lock:
+            self.local_payloads[page_id] = payload
+        count = 0
+        with transaction(self.settings.database_path) as db:
+            rows = db.execute("SELECT * FROM prepared_questions WHERE page_id=?", (page_id,)).fetchall()
+            for row in rows:
+                item = dict(row)
+                item.update(box=json.loads(item["box_json"]), confidence=item["read_confidence"],
+                            reading=json.loads(item["reading_json"]) if item["reading_json"] else None)
+                attach_reading_anchors([item], frame, payload)
+                if item.get("reading"):
+                    count += len(item["reading"]["anchors"])
+                    db.execute("UPDATE prepared_questions SET reading_json=? WHERE id=?",
+                               (json.dumps(item["reading"], ensure_ascii=False), item["id"]))
+        return count
+
+    def bind_selection(self, session_id: str, family_id: str, image: bytes,
+                       question_id: str, geometry: dict, strokes: list) -> dict | None:
+        """Independently validate a local selection before using its cached content."""
+        page_id = geometry.get("page_id")
+        snapshot = self.index(session_id, family_id, page_id)
+        if not snapshot or snapshot["frame_sha256"] != geometry.get("frame_sha256"):
+            return None
+        selected = next((item for item in snapshot["questions"] if item["id"] == question_id), None)
+        matrix = geometry.get("matrix")
+        with self.lock:
+            frame = self.frames.get(page_id)
+        if (not selected or not frame or not valid_transform(frame, image, matrix, selected["box"])):
+            return None
+        try:
+            projected = [{**item, "box": map_box(matrix, item["box"]),
+                          "answer_regions": [map_box(matrix, box) for box in item["answer_regions"]]}
+                         for item in snapshot["questions"] if item["read_confidence"] >= .85
+                         and item["progress"] != "occluded"]
+            scores = stroke_scores(projected, strokes)
+            chosen_score = next((score for score, _, item in scores if item["id"] == question_id), 0)
+            explicit = geometry.get("confirmed") is True
+            if (chosen_score < (.25 if explicit else .65) or not explicit and
+                    (not scores or scores[0][2]["id"] != question_id
+                     or len(scores) > 1 and scores[0][0] - scores[1][0] < .16)):
+                return None
+            item = self.teaching_question(session_id, family_id, frame, question_id)
+            if not item:
+                return None
+            reading = json.loads(item["reading_json"]) if item["reading_json"] else None
+            if reading:
+                reading = {**reading, "anchors": [{**anchor, "box": map_box(matrix, anchor["box"])}
+                                                  for anchor in reading.get("anchors", [])]}
+            return {**item, "box": map_box(matrix, item["box"]), "reading": reading,
+                    "_prepared_image": frame, "_registration": matrix}
+        except (ValueError, KeyError, TypeError):
+            return None
+
+    def prioritize(self, session_id: str, family_id: str, item: dict) -> None:
+        """Promote queued work, sharing an already running solve instead of duplicating it."""
+        if not item.get("id") or not item.get("page_id") or item.get("verification_status") != "pending":
+            return
+        key = (item["page_id"], item["ordinal"])
+        with self.lock:
+            future = self.question_futures.get(key)
+            if key in self.foreground_jobs or key in self.running_questions:
+                return
+        if future and not future.cancel():
+            return
+        config = preferences(self.settings.database_path, family_id)
+        with self.lock:
+            if key in self.foreground_jobs:
+                return
+            frame = self.frames.get(item["page_id"])
+            if not frame:
+                return
+            self.foreground_jobs.add(key)
+            self.question_jobs.add(key)
+        question = {**item, "box": json.loads(item["box_json"]),
+                    "confidence": item["read_confidence"]}
+        self.foreground.submit(self._solve_one, item["page_id"], session_id, family_id,
+                               frame, config, replace(self.settings, ai_model=config["solver_model"]),
+                               question, item["ordinal"], "", "")
 
     def match(self, session_id: str, image: bytes, reference: str,
               *, spoken: bool = False, reviewing: bool = False) -> dict | None:

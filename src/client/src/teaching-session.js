@@ -14,6 +14,7 @@ export function mergeTeachingTarget(current, update) {
     cue: update.cue ?? previous.cue ?? null,
     beats: update.beats || previous.beats || [],
     textAnchors: update.textAnchors || previous.textAnchors || [],
+    selectionStrokes: update.selectionStrokes || previous.selectionStrokes || [],
   };
 }
 
