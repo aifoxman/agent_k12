@@ -956,11 +956,21 @@ export async function runBrowserAcceptance(page, config, writeAllowed) {
           state.mode === "review" &&
             !state.frozen &&
             !state.marks.length &&
-            !state.controls.length,
+            state.phase === "idle" &&
+            !(await page.locator(".teaching-step-pause").count()),
           "Cold review placed historical page coordinates onto the live camera or started playback",
         );
+        // Static history deliberately exposes previous/next/replay controls.
+        // Their presence is not evidence that automatic playback started.
+        await page.waitForTimeout(config.dwell_ms);
+        const stationary = await snapshot();
+        expect(
+          stationary.phase === "idle" && stationary.step === state.step &&
+            !stationary.frozen && !stationary.marks.length,
+          "Cold history advanced or restored live-camera marks without a user action",
+        );
         const next = page
-          .locator(".teaching-scratch")
+          .locator(".teaching-step-controls")
           .getByRole("button", { name: "下一步", exact: true });
         let advances = 0;
         while (
