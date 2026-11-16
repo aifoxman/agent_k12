@@ -221,6 +221,25 @@ def test_literal_reading_draft_is_not_reported_as_a_ready_solution_method():
     assert timing["first_thinking_ms"] == 2000
 
 
+def test_unscored_failed_baseline_cannot_prove_a_new_math_regression(tmp_path):
+    from scripts.question_bank.corpus import dump
+    from scripts.question_bank.report import compare
+    key = "case.correct.clean.json"
+    record = {"case_id": "case", "mode": "correct", "variant": "clean", "grade": 1,
+              "subject": "math", "completed": True, "response": {}, "total_ms": 10,
+              "input_sha256": "same", "result_key": key}
+    for tag in ("baseline", "candidate"):
+        dump(tmp_path / "results" / tag / key, record)
+    dump(tmp_path / "reviews/baseline" / key, {"verdict": "fail", "scores": {}, "reference_reliable": False,
+                                               "findings": [], "rubric_version": "same"})
+    dump(tmp_path / "reviews/candidate" / key, {"verdict": "fail", "scores": {"accuracy": 1}, "reference_reliable": True,
+        "findings": [{"severity": "critical", "reason": "wrong answer"}], "rubric_version": "same"})
+    value = compare(tmp_path, "baseline", "candidate")
+    assert value["new_critical"] == []
+    assert value["candidate_critical_with_unassessed_baseline"] == [key]
+    assert value["quality_gate"] == "failed"  # Candidate error still blocks release.
+
+
 def test_unterminated_sse_cannot_fake_a_done():
     assert list(events(["event: done", 'data: {"located": true}'])) == []
     assert list(events(["event: beat", 'data: {"speech":"看条件"}', ""])) == [("beat", {"speech": "看条件"})]

@@ -90,15 +90,20 @@ def compare(output: Path, baseline: str, candidate: str, split="development"):
             common.append(key)
     def critical(item):
         return item.get("verdict") == "fail" and not item.get("excluded_from_quality_comparison") and any(f.get("severity") == "critical" for f in item.get("findings", []))
-    new_critical = [key for key in common if critical(right[key]) and not critical(left[key])]
+    observed_critical = [key for key in common if critical(right[key])]
+    unassessed_baseline = [key for key in observed_critical
+                          if not left[key].get("scores") or left[key].get("reference_reliable") is not True]
+    new_critical = [key for key in observed_critical if key not in unassessed_baseline and not critical(left[key])]
     value = {"baseline": baseline, "candidate": candidate, "split": split,
              "paired_tasks": len(common), "unpaired_baseline": sorted(left.keys() - right.keys()),
              "input_or_rubric_mismatch": input_or_rubric_mismatch,
              "unpaired_candidate": sorted(right.keys() - left.keys()),
              "new_critical": new_critical,
+             "observed_candidate_critical": observed_critical,
+             "candidate_critical_with_unassessed_baseline": unassessed_baseline,
              "improved": [k for k in common if left[k]["verdict"] != "pass" and right[k]["verdict"] == "pass"],
              "regressed": [k for k in common if left[k]["verdict"] == "pass" and right[k]["verdict"] != "pass"],
              "baseline_counts": a["groups"].get("all"), "candidate_counts": b["groups"].get("all"),
-             "quality_gate": "not_established" if not common else "failed" if new_critical else "requires_evidence_review"}
+             "quality_gate": "not_established" if not common else "failed" if observed_critical else "requires_evidence_review"}
     dump(base / "reports" / f"{baseline}-vs-{candidate}.json", value)
     return value
