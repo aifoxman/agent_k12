@@ -6224,6 +6224,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
   requestHintRef.current = requestHint;
   const exitTeaching = () => {
     clearFrozenSelection();
+    setSelection(null);
+    setSelectionStrokes([]);
     hintContextRef.current.invalidate();
     markHintRequestRef.current?.abort();
     markHintRequestRef.current = null;
@@ -7872,9 +7874,6 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                     beatIndex={paperPresentation.beatIndex}
                     playbackVersion={hintTarget.playbackVersion}
                   />
-                  {hintTarget.selectionStrokes?.length > 0 && (
-                    <SelectionInk strokes={hintTarget.selectionStrokes} />
-                  )}
                   {showTeachingMarks && hintTarget.cue && !hintTarget.beats?.length && (
                     <div
                       className={`hint-visual-cue ${hintTarget.cue.kind}`}
@@ -7890,90 +7889,93 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                   )}
                 </TeachingPaperFrame>
               )}
-              {stage === 'active' && !teachingVisible && !cameraPreviewFullscreen && (
-                <>
-                  {selectionImage && (
-                    <img
-                      className="selection-snapshot"
-                      src={selectionImage}
-                      alt="圈画时固定的作业画面"
+              {stage === 'active' &&
+                teachingMode === 'idle' &&
+                !teachingVisible &&
+                !cameraPreviewFullscreen && (
+                  <>
+                    {selectionImage && (
+                      <img
+                        className="selection-snapshot"
+                        src={selectionImage}
+                        alt="圈画时固定的作业画面"
+                      />
+                    )}
+                    <SelectionBox
+                      selection={selection}
+                      strokes={selectionStrokes}
+                      resetOnNextStroke={selectionConsumed}
+                      onStrokeStart={freezePenFrame}
+                      onChange={(box, strokes) => {
+                        if (teachingMode !== 'idle') exitTeaching();
+                        saveQuestionGuidance(null);
+                        penHintSchedulerRef.current.change();
+                        markHintRequestRef.current?.abort();
+                        setSelection(box);
+                        setSelectionStrokes(strokes);
+                        setSelectionConsumed(false);
+                        setHintTarget(null);
+                        setSelectionChoices(null);
+                        if (!strokes.length) clearFrozenSelection();
+                      }}
+                      onStrokeEnd={(strokes) => {
+                        if (frozenSelectionRef.current)
+                          frozenSelectionRef.current.penUpAt = performance.now();
+                        if (!questionInputOpen && !batchOpen && !correctionOpen && !voiceCall)
+                          penHintSchedulerRef.current.finish(strokes);
+                      }}
+                      onHint={() => {
+                        if (hintBusy && markHintRequestRef.current) return;
+                        penHintSchedulerRef.current.cancel();
+                        requestHint(READING_QUESTION);
+                      }}
+                      onCorrect={() => {
+                        penHintSchedulerRef.current.cancel();
+                        markHintRequestRef.current?.abort();
+                        requestSelectedCorrection();
+                      }}
+                      disabled={hintBusy || batchSubmitting || selectedCaptureBusy}
                     />
-                  )}
-                  <SelectionBox
-                    selection={selection}
-                    strokes={selectionStrokes}
-                    resetOnNextStroke={selectionConsumed}
-                    onStrokeStart={freezePenFrame}
-                    onChange={(box, strokes) => {
-                      if (teachingMode !== 'idle') exitTeaching();
-                      saveQuestionGuidance(null);
-                      penHintSchedulerRef.current.change();
-                      markHintRequestRef.current?.abort();
-                      setSelection(box);
-                      setSelectionStrokes(strokes);
-                      setSelectionConsumed(false);
-                      setHintTarget(null);
-                      setSelectionChoices(null);
-                      if (!strokes.length) clearFrozenSelection();
-                    }}
-                    onStrokeEnd={(strokes) => {
-                      if (frozenSelectionRef.current)
-                        frozenSelectionRef.current.penUpAt = performance.now();
-                      if (!questionInputOpen && !batchOpen && !correctionOpen && !voiceCall)
-                        penHintSchedulerRef.current.finish(strokes);
-                    }}
-                    onHint={() => {
-                      if (hintBusy && markHintRequestRef.current) return;
-                      penHintSchedulerRef.current.cancel();
-                      requestHint(READING_QUESTION);
-                    }}
-                    onCorrect={() => {
-                      penHintSchedulerRef.current.cancel();
-                      markHintRequestRef.current?.abort();
-                      requestSelectedCorrection();
-                    }}
-                    disabled={hintBusy || batchSubmitting || selectedCaptureBusy}
-                  />
-                  {selectionChoices && (
-                    <div
-                      className="selection-question-choice"
-                      role="group"
-                      aria-label="请选择圈画的题目"
-                    >
-                      <span>你想看哪一道？</span>
-                      {selectionChoices.map((item) => (
-                        <button
-                          key={item.id}
-                          onClick={() =>
-                            requestHint(
-                              READING_QUESTION,
-                              '',
-                              '',
-                              selectionStrokes,
-                              null,
-                              false,
-                              false,
-                              item.id,
-                            )
-                          }
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                      <button
-                        className="quiet"
-                        onClick={() => {
-                          clearFrozenSelection();
-                          setSelection(null);
-                          setSelectionStrokes([]);
-                        }}
+                    {selectionChoices && (
+                      <div
+                        className="selection-question-choice"
+                        role="group"
+                        aria-label="请选择圈画的题目"
                       >
-                        重新圈画
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+                        <span>你想看哪一道？</span>
+                        {selectionChoices.map((item) => (
+                          <button
+                            key={item.id}
+                            onClick={() =>
+                              requestHint(
+                                READING_QUESTION,
+                                '',
+                                '',
+                                selectionStrokes,
+                                null,
+                                false,
+                                false,
+                                item.id,
+                              )
+                            }
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                        <button
+                          className="quiet"
+                          onClick={() => {
+                            clearFrozenSelection();
+                            setSelection(null);
+                            setSelectionStrokes([]);
+                          }}
+                        >
+                          重新圈画
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
               {annotation.length > 1 && (
                 <svg
                   className="annotation-overlay"

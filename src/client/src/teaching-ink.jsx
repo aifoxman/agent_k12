@@ -285,12 +285,16 @@ export function TeachingInk({
       role="img"
     >
       <svg className="teaching-page-ink" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-        {pageMarks.length === 0 && target.box && (
-          <InkStroke
-            className="teaching-target-stroke fresh"
-            d={pageMarkPath({ kind: 'circle', box: target.box }, width, height)}
-          />
-        )}
+        {pageMarks.length === 0 &&
+          target.box &&
+          !beats.some(
+            (beat) => beat.speech?.trim() || beat.scratch?.length || beat.page?.length,
+          ) && (
+            <InkStroke
+              className="teaching-target-stroke fresh"
+              d={pageMarkPath({ kind: 'circle', box: target.box }, width, height)}
+            />
+          )}
         {pageMarks
           .filter((mark) => !['label', 'check', 'note'].includes(mark.kind))
           .map((mark) => (
