@@ -5855,6 +5855,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     let streamedSentences = 0;
     const streamedBeats = [];
     const readingKeys = new Set();
+    const readingGroups = new Map();
     const pendingVisual = [];
     const playbackRun = ++teachingRunRef.current;
     const frameRevision = cameraViewRevision.current;
@@ -5996,13 +5997,14 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         streamedBeats.push(data);
         trace.mark(data.phase === 'reading' ? 'reading_ready' : 'explanation_ready');
         streamedSentences++;
-        playback.enqueue(
-          splitTeachingBeat(data, {
-            sourceBeatIndex: streamedBeats.length - 1,
-            sentenceChunks: true,
-            maxChars: 72,
-          }),
-        );
+        const options = {
+          sourceBeatIndex: streamedBeats.length - 1,
+          sentenceChunks: true,
+          maxChars: 72,
+        };
+        const parts = splitTeachingBeat(data, options);
+        if (data.reading_key) readingGroups.set(data.reading_key, { beat: data, parts, options });
+        playback.enqueue(parts);
       };
       if (candidateId && acceptedOffer?.reading?.beat) {
         updateTarget({ box: acceptedOffer.reading.box, label: acceptedOffer.reading.label });
@@ -6013,6 +6015,18 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
         form,
         (event, data) => {
           if (!isCurrent()) return;
+          if (event === 'reading_marks') {
+            const group = readingGroups.get(data.reading_key);
+            if (!group) return;
+            group.beat.page = data.page;
+            const updated = splitTeachingBeat(group.beat, group.options);
+            group.parts.forEach((part, index) => {
+              part.page = updated[index].page;
+              part.page_cues = updated[index].page_cues;
+            });
+            updateTarget({ textAnchors: data.anchors });
+            return;
+          }
           if (event === 'status' && data.stage === 'checking_solution') {
             setHintPreparationLabel('正在核对解题过程…');
             return;

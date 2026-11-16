@@ -211,7 +211,10 @@ class _Ink:
         crop = self.image.crop((max(0, left - 2), max(0, top - 2),
                                 min(self.width, right + 2), min(self.height, bottom + 2)))
         window = min(31, max(5, 2 * round(min(crop.size) * .4) + 1))
-        paper = crop.filter(ImageFilter.MaxFilter(window)).load()
+        # Camera sharpening adds a few bright halo pixels around black type.
+        # A maximum mistakes those halos for the paper and labels the darker
+        # paper surface as ink. A local upper percentile resists these outliers.
+        paper = crop.filter(ImageFilter.RankFilter(window, round((window * window - 1) * .85))).load()
         pixels = crop.load()
         ink = [(px, py) for py in range(crop.height) for px in range(crop.width)
                if pixels[px, py] < 180

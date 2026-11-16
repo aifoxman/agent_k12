@@ -2875,6 +2875,7 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                                          "question_id": target_item.get("id"),
                                          "teaching_tier": level, "reading": prepared_intro})
             anchor_future = None
+            annotations_published = False
 
             def read_anchors_in_parallel():
                 with teaching_call_context(family["id"], trace_id):
@@ -2894,9 +2895,33 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
             def with_anchors(item):
                 if anchor_future is None:
                     return _teaching_anchors(image_bytes, item, anchor_state, family["id"], question)
+                if not anchor_future.done():
+                    return item  # Optional coordinates must not block reasoning.
                 annotated = anchor_future.result()
                 return {**item, "anchors": annotated.get("anchors", []),
                         "_teaching_anchor_image_key": annotated.get("_teaching_anchor_image_key")}
+
+            def ready_annotations(item):
+                nonlocal annotations_published
+                if annotations_published or not anchor_future or not anchor_future.done():
+                    return None
+                annotations_published = True
+                try:
+                    annotated = with_anchors(item)
+                    if not reading_beats:
+                        return None
+                    reading = item.get("reading") or json.loads(item.get("reading_json") or "null")
+                    if not reading:
+                        return None
+                    intro = reading_review({**item, "reading": {
+                        **reading, "anchors": annotated.get("anchors", [])}}, image_bytes)
+                    if not intro or not intro["page"]:
+                        return None
+                    reading_beats[0]["page"] = intro["page"]
+                    return {"reading_key": intro["reading_key"], "page": intro["page"],
+                            "anchors": annotated.get("anchors", [])}
+                except (HTTPException, httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
+                    return None
 
             if not student_thought and not previous_hint_id:
                 intro = prepared_intro
@@ -2977,6 +3002,9 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     ):
                         if kind != "beat" or quoted_target_conflict(beat["speech"], target_item["evidence"]):
                             continue
+                        annotations = ready_annotations(target_item)
+                        if annotations:
+                            yield _hint_event("reading_marks", annotations)
                         beat = explanation_beat(beat)
                         spoken_beats.append(beat)
                         if not first_beat_logged:
@@ -2986,6 +3014,9 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                             first_beat_logged = True
                         yield _hint_event("beat", beat)
                     if spoken_beats:
+                        annotations = ready_annotations(target_item)
+                        if annotations:
+                            yield _hint_event("reading_marks", annotations)
                         yield _hint_event("done", finish_beats(target_item, spoken_beats))
                         return
                 except (HTTPException, httpx.HTTPError, ValueError, KeyError, TypeError):
@@ -3013,6 +3044,9 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 ):
                     if kind != "beat" or quoted_target_conflict(beat["speech"], target_item["evidence"]):
                         continue
+                    annotations = ready_annotations(target_item)
+                    if annotations:
+                        yield _hint_event("reading_marks", annotations)
                     beat = explanation_beat(beat)
                     text_beats.append(beat)
                     yield _hint_event("beat", beat)

@@ -60,36 +60,46 @@ export function pageAgreement(reference, current, matrix, box = [0, 0, 1, 1]) {
     localMatched = 0;
   const matched = [];
   const [qx, qy, qw, qh] = box;
+  const inspect = (x, y) => {
+    const first = [],
+      second = [];
+    for (const dy of [-3, 0, 3])
+      for (const dx of [-3, 0, 3]) {
+        const px = x + dx / reference.width,
+          py = y + dy / reference.height;
+        const [u, v] = project(matrix, px, py);
+        if (u <= 0.01 || u >= 0.99 || v <= 0.01 || v >= 0.99) continue;
+        first.push(pixel(reference, px * (reference.width - 1), py * (reference.height - 1)));
+        second.push(pixel(current, u * (current.width - 1), v * (current.height - 1)));
+      }
+    if (first.length !== 9 || Math.max(...first) - Math.min(...first) < 65) return null;
+    const a = first.reduce((s, v) => s + v, 0) / 9,
+      b = second.reduce((s, v) => s + v, 0) / 9;
+    const va = first.reduce((s, v) => s + (v - a) ** 2, 0);
+    const vb = second.reduce((s, v) => s + (v - b) ** 2, 0);
+    const correlation =
+      first.reduce((s, v, i) => s + (v - a) * (second[i] - b), 0) / Math.max(1, Math.sqrt(va * vb));
+    return correlation;
+  };
   for (let iy = 2; iy < 39; iy += 2)
     for (let ix = 2; ix < 39; ix += 2) {
       const x = ix / 40,
         y = iy / 40,
-        first = [],
-        second = [];
-      for (const dy of [-3, 0, 3])
-        for (const dx of [-3, 0, 3]) {
-          const px = x + dx / reference.width,
-            py = y + dy / reference.height;
-          const [u, v] = project(matrix, px, py);
-          if (u <= 0.01 || u >= 0.99 || v <= 0.01 || v >= 0.99) continue;
-          first.push(pixel(reference, px * (reference.width - 1), py * (reference.height - 1)));
-          second.push(pixel(current, u * (current.width - 1), v * (current.height - 1)));
-        }
-      if (first.length !== 9 || Math.max(...first) - Math.min(...first) < 65) continue;
-      const a = first.reduce((s, v) => s + v, 0) / 9,
-        b = second.reduce((s, v) => s + v, 0) / 9;
-      const va = first.reduce((s, v) => s + (v - a) ** 2, 0);
-      const vb = second.reduce((s, v) => s + (v - b) ** 2, 0);
-      const correlation =
-        first.reduce((s, v, i) => s + (v - a) * (second[i] - b), 0) /
-        Math.max(1, Math.sqrt(va * vb));
-      const local = x >= qx - 0.02 && x <= qx + qw + 0.02 && y >= qy - 0.02 && y <= qy + qh + 0.02;
+        correlation = inspect(x, y);
+      if (correlation === null) continue;
       tested++;
-      localTested += Number(local);
       if (correlation >= 0.82) {
         matched.push([x, y]);
-        localMatched += Number(local);
       }
+    }
+  // Whole-page grid points can entirely miss a one-line question. Sample
+  // inside its actual box instead; retain the same pixel evidence threshold.
+  for (let iy = 0; iy < 12; iy++)
+    for (let ix = 0; ix < 24; ix++) {
+      const correlation = inspect(qx + (qw * (ix + 0.5)) / 24, qy + (qh * (iy + 0.5)) / 12);
+      if (correlation === null) continue;
+      localTested++;
+      if (correlation >= 0.82) localMatched++;
     }
   const coverage = matched.length
     ? Math.max(...matched.map((p) => p[0])) - Math.min(...matched.map((p) => p[0])) >= 0.25 &&
@@ -100,8 +110,8 @@ export function pageAgreement(reference, current, matrix, box = [0, 0, 1, 1]) {
       tested >= 18 &&
       matched.length >= 14 &&
       matched.length / tested >= 0.62 &&
-      localTested >= 4 &&
-      localMatched / localTested >= 0.65 &&
+      localTested >= 8 &&
+      localMatched / localTested >= 0.72 &&
       coverage,
     matched: matched.length,
     tested,

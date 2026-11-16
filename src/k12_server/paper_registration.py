@@ -52,32 +52,40 @@ def valid_transform(reference: bytes, current: bytes, matrix: list, question_box
             matched, tested, local_matched, local_tested = [], 0, 0, 0
             qx, qy, qw, qh = question_box
             # A 2D patch defeats repeated notebook rules and single-line matches.
+            def inspect(x, y):
+                first, second = [], []
+                for dy in (-3, 0, 3):
+                    for dx in (-3, 0, 3):
+                        px, py = x + dx / source.width, y + dy / source.height
+                        u, v = project(matrix, px, py)
+                        if not .01 < u < .99 or not .01 < v < .99:
+                            continue
+                        first.append(old[round(px * (source.width - 1)), round(py * (source.height - 1))])
+                        second.append(new[round(u * (destination.width - 1)), round(v * (destination.height - 1))])
+                if len(first) != 9 or max(first) - min(first) < 65:
+                    return None
+                a, b = sum(first) / 9, sum(second) / 9
+                va = sum((p - a) ** 2 for p in first)
+                vb = sum((p - b) ** 2 for p in second)
+                return sum((p - a) * (q - b) for p, q in zip(first, second, strict=True)) / max(1, (va * vb) ** .5)
             for iy in range(2, 39, 2):
                 for ix in range(2, 39, 2):
                     x, y = ix / 40, iy / 40
-                    first, second = [], []
-                    for dy in (-3, 0, 3):
-                        for dx in (-3, 0, 3):
-                            px, py = x + dx / source.width, y + dy / source.height
-                            u, v = project(matrix, px, py)
-                            if not .01 < u < .99 or not .01 < v < .99:
-                                break
-                            first.append(old[round(px * (source.width - 1)), round(py * (source.height - 1))])
-                            second.append(new[round(u * (destination.width - 1)), round(v * (destination.height - 1))])
-                    if len(first) != 9 or max(first) - min(first) < 65:
+                    correlation = inspect(x, y)
+                    if correlation is None:
                         continue
-                    a, b = sum(first) / 9, sum(second) / 9
-                    va = sum((p - a) ** 2 for p in first)
-                    vb = sum((p - b) ** 2 for p in second)
-                    correlation = sum((p - a) * (q - b) for p, q in zip(first, second, strict=True)) / max(1, (va * vb) ** .5)
-                    local = qx - .02 <= x <= qx + qw + .02 and qy - .02 <= y <= qy + qh + .02
                     tested += 1
-                    local_tested += local
                     if correlation >= .82:
                         matched.append((x, y))
-                        local_matched += local
+            for iy in range(12):
+                for ix in range(24):
+                    correlation = inspect(qx + qw * (ix + .5) / 24,
+                                          qy + qh * (iy + .5) / 12)
+                    if correlation is not None:
+                        local_tested += 1
+                        local_matched += correlation >= .82
             return (tested >= 18 and len(matched) >= 14 and len(matched) / tested >= .62
-                    and local_tested >= 4 and local_matched / local_tested >= .65
+                    and local_tested >= 8 and local_matched / local_tested >= .72
                     and max(x for x, _ in matched) - min(x for x, _ in matched) >= .25
                     and max(y for _, y in matched) - min(y for _, y in matched) >= .25)
     except (OSError, ValueError, ZeroDivisionError):

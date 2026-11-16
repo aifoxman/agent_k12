@@ -134,6 +134,34 @@ def test_anchor_lookup_overlaps_solution_instead_of_starting_after_it(prepared, 
     def solve(_s, _f, _i, target, *_args, **_kwargs):
         assert entered.wait(1), "Anchor lookup was still blocked behind the solve"
         release.set()
+
+
+def test_slow_optional_anchors_do_not_block_the_first_reasoning_board(prepared, monkeypatch):
+    from threading import Event
+    from test_prepared_lesson_wait import SOLUTION, ask
+    _, module, _, _, _, _, _ = prepared
+    entered, release = Event(), Event()
+    def anchors(_image, target, *_args):
+        entered.set()
+        release.wait(3)
+        return target
+    def tutor(*_args):
+        assert entered.wait(1)
+        assert not release.is_set(), "The explanation still waited for word positions"
+        yield "beat", {"speech": "先比较这两个部分的关系。", "step_id": 1, "step_end": True,
+                       "page": [], "scratch": [{"kind": "text", "role": "prose", "text": "先找关系"}],
+                       "reply_mode": "none", "teaching_move": "give_clue"}
+        release.set()
+    monkeypatch.setattr(module, "_teaching_anchors", anchors)
+    monkeypatch.setattr(module, "_resolve_teaching_solution", lambda _s, _f, _i, item, *_a, **_k:
+                        {**item, "solution": SOLUTION, "verification_status": "verified"})
+    monkeypatch.setattr(module, "_refresh_teaching_solution", lambda _s, _f, _i, item, *_a, **_k: item)
+    monkeypatch.setattr(module, "stream_teaching_beats", tutor)
+    try:
+        response = ask(prepared)
+        assert response.status_code == 200 and 'event: done' in response.text
+    finally:
+        release.set()
         return {**target, "solution": SOLUTION, "verification_status": "verified"}
     monkeypatch.setattr(module, "_teaching_anchors", anchors)
     monkeypatch.setattr(module, "_resolve_teaching_solution", solve)

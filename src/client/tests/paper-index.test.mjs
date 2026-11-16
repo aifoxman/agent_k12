@@ -164,3 +164,19 @@ test('homography preserves rotation and perspective and rejects degenerate sampl
   );
   assert.equal(projectBox([1, 0, 0.5, 0, 1, 0, 0, 0, 1], [0.6, 0.1, 0.2, 0.2]), null);
 });
+
+test('a thin printed question is checked inside its box rather than missed by a whole-page grid', () => {
+  const image = page();
+  assert.ok(pageAgreement(image, image, IDENTITY, [0.12, 0.187, 0.7, 0.035]).reliable);
+  const bound = bindPaperIndex(
+    { pixels: image, questions: [question('thin', [0.12, 0.187, 0.7, 0.035])] },
+    image,
+    [
+      [
+        [0.2, 0.2],
+        [0.6, 0.2],
+      ],
+    ],
+  );
+  assert.equal(bound.question?.id, 'thin');
+});

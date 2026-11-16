@@ -58,6 +58,15 @@ def test_exact_glyph_edge_has_a_small_validation_margin_but_keeps_original_coord
     assert accepted and accepted[0]["box"] == pytest.approx(tight["box"], abs=1e-6)
 
 
+def test_camera_sharpening_halos_do_not_turn_the_paper_surface_into_border_ink():
+    picture, anchor = word_on_paper(160, 25)
+    font = ImageFont.load_default(size=30)
+    ImageDraw.Draw(picture).text((220, 160), "nonzero", font=font, fill=25,
+                                stroke_width=1, stroke_fill=200)
+    accepted = verify_teaching_anchors(encoded(picture), [anchor], TARGET, "nonzero")
+    assert accepted and accepted[0]["box"] == pytest.approx(anchor["box"], abs=1e-6)
+
+
 @pytest.mark.parametrize("background", [255, 170, 125, 85])
 def test_flat_empty_paper_cannot_validate_a_word_even_when_every_pixel_is_below180(background):
     picture, anchor = word_on_paper(background)
