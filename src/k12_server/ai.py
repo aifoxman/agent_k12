@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from .config import Settings
 from .answer_validation import (
-    arithmetic_conflict, false_option_is_requested, validated_choice_evaluation,
+    arithmetic_conflict, choice_comparison_conflict, choice_letter, false_option_is_requested, validated_choice_evaluation,
 )
 from .db import transaction
 from .teaching_alignment import (
@@ -451,7 +451,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
                                           and status != "needs_discussion" and not supported_blank)):
         return "unclear", False
     comparison = validated_choice_evaluation(item)
-    if isinstance(item.get("choice_evaluation"), dict) and comparison is None:
+    if choice_comparison_conflict(item):
         return "unclear", True
     if (comparison and status in {"looks_correct", "check_again"}
             and comparison["selection_matches"] != (status == "looks_correct")):
@@ -471,7 +471,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
         )) else ""
     explanation = re.sub(r"(?:没有|未发现|未见|无|不存在)(?:计算|运算|书写|抄写|数数|计数|单位){0,2}(?:错误|差错)|不是错误|并未(?:算错|写错|答错)|(?:不是|并非|不属于)(?:孩子|学生|本题)?的?(?:答案|作答|解答|计算|书写|步骤)[中里]?的?(?:错误|问题)",
                          negated_error, explanation)
-    chosen = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(?:[）).。:：、，,；;\s]|$)", answer)
+    chosen = choice_letter(answer)
     if status == "looks_correct" and chosen:
         # Explaining why an UNSELECTED option is wrong does not contradict a
         # correct selection. Retain unclear subjects and mixed/child verdicts.
@@ -481,11 +481,11 @@ def grounded_check_status(item: dict, box: list[float] | None,
         for clause in clauses:
             options = re.findall(r"(?<![A-Za-z])([A-H])(?=项|句|[、.．:：])|(?:选项|句子)([A-H])", clause)
             labels = {a or b for a, b in options}
-            if (labels and chosen[1] not in labels
-                    and not re.search(rf"(?<![A-Za-z]){chosen[1]}(?![A-Za-z])", clause)
+            if (labels and chosen not in labels
+                    and not re.search(rf"(?<![A-Za-z]){chosen}(?![A-Za-z])", clause)
                     and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
                 continue
-            if (requested_false_option and labels == {chosen[1]}
+            if (requested_false_option and labels == {chosen}
                     and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
                 # For a literal negative-choice ask, a false statement can be
                 # exactly the right selection. Keep every actual student or

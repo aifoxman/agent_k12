@@ -111,6 +111,27 @@ def test_selecting_an_incorrect_equation_may_quote_it_without_asserting_it_is_tr
     assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
 
 
+def test_blank_selection_is_not_an_invalid_written_choice():
+    item = {**choice_item(), "answer": "", "answer_state": "blank", "status": "check_again",
+            "reason": "孩子未作答，题目与留白均清楚", "solution_steps": ["核对要求后选择D"]}
+    item["choice_evaluation"] = {**item["choice_evaluation"], "selected": None, "selection_matches": False}
+    assert grounded_check_status(item, None) == ("check_again", False)
+    assert normalized_solution_fields(item, "check_again")["reference_answer"] == "选D"
+
+
+def test_reasoning_before_the_selection_can_be_graded_without_losing_the_solution():
+    item = {**choice_item(), "answer": "体积一定，底面积与高的乘积一定，所以成反比例。选C。",
+            "reference_answer": "C，成反比例。", "reason": "选择C符合题目要求。",
+            "visible_question_text": "圆柱的体积一定，它的底面积与高是什么关系？",
+            "choice_evaluation": {"requirement": "底面积与高是什么关系", "selected": "C", "expected": "C",
+                                  "selection_matches": True, "selected_statement_truth": "true"}}
+    assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
+    assert normalized_solution_fields(item, "looks_correct")["reference_answer"] == "C，成反比例。"
+    # Unsupported auxiliary transcription is not proof of a grading conflict.
+    item["choice_evaluation"]["requirement"] = "判断比例关系"
+    assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
+
+
 def test_false_equation_cannot_survive_in_cached_teaching_or_grading_solution():
     solution = {"answer": "8", "steps": "12−3=8", "confidence": .99, "ambiguous": False}
     assert not grounded_teaching_solution(solution, .99)

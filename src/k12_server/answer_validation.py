@@ -83,7 +83,16 @@ def choice_letter(value: object) -> str | None:
         return None
     match = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(.*)$", value, re.S)
     if not match:
-        return None
+        # A student may write the reasoning first and the selection last.
+        declarations = list(re.finditer(r"(?:选(?:择)?|答案(?:是|为|[:：]))\s*([A-H])(?=$|[^A-Za-z])", value))
+        if len({m[1] for m in declarations}) != 1:
+            return None
+        declaration = declarations[0]
+        prefix = value[max(0, declaration.start() - 10):declaration.start()]
+        if re.search(r"(?:不能|不|不是|别)\s*$|(?:可能|也许|或许).{0,4}$", prefix):
+            return None
+        # Reuse the same ambiguity/retraction checks for the remainder.
+        return choice_letter(declaration[1] + value[declaration.end():])
     rest = match[2].strip()
     if not rest or re.fullmatch(r"[）).。\s]+", rest):
         return match[1]
@@ -123,6 +132,27 @@ def validated_choice_evaluation(item: dict) -> dict | None:
             or value["selection_matches"] != (selected == expected)):
         return None
     return value
+
+
+def choice_comparison_conflict(item: dict) -> bool:
+    """An unsupported optional comparison is not a contradictory student answer."""
+    value = item.get("choice_evaluation")
+    if not isinstance(value, dict) or not str(item.get("answer") or "").strip():
+        return False
+    selected, expected = choice_letter(item.get("answer")), choice_letter(item.get("reference_answer"))
+    if (selected and isinstance(value.get("selected"), str) and len(value["selected"]) == 1
+            and value["selected"] in "ABCDEFGH" and value["selected"] != selected):
+        return True
+    if (expected and isinstance(value.get("expected"), str) and len(value["expected"]) == 1
+            and value["expected"] in "ABCDEFGH" and value["expected"] != expected):
+        return True
+    if selected and expected:
+        matches = selected == expected
+        if type(value.get("selection_matches")) is bool and value["selection_matches"] != matches:
+            return True
+        if item.get("status") in {"looks_correct", "check_again"}:
+            return matches != (item["status"] == "looks_correct")
+    return False
 
 
 def false_option_is_requested(item: dict) -> bool:
