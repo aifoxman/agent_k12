@@ -270,11 +270,15 @@ def test_only_verified_non_answer_entry_clue_can_appear_on_the_initial_thinking_
     response = ask(prepared, question="读题并说明解题思路")
     intro = next(data for kind, data in events(response) if kind == "beat")
     assert intro["phase"] == "reading"
-    assert bool(intro["scratch"]) is expected
     if expected:
         assert intro["scratch"][0]["preview"] is True
         assert intro["scratch"][0]["text"] == seed
         assert seed not in intro["speech"], "The thinking preview added another compulsory spoken turn"
+    else:
+        assert [item["text"] for item in intro["scratch"]] == ["已知：本题两个部分", "所求：说明关系"]
+        assert all(item["draft_kind"] == "reading" for item in intro["scratch"])
+        assert seed not in json.dumps(intro["scratch"], ensure_ascii=False)
+        assert "17" not in json.dumps(intro["scratch"], ensure_ascii=False)
 
 
 def test_selected_planned_question_can_run_before_the_page_worker_finishes(prepared, monkeypatch):
