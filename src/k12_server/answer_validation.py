@@ -5,10 +5,13 @@ import ast
 import re
 from fractions import Fraction
 
+OPERATORS = str.maketrans({"×": "*", "÷": "/", "−": "-", "－": "-", "＝": "=",
+                           "＋": "+", "／": "/", "＊": "*", "（": "(", "）": ")"})
+
 
 def arithmetic_value(expression: str) -> Fraction:
     """Evaluate bounded decimal arithmetic without eval, names, powers or calls."""
-    expression = expression.strip().translate(str.maketrans({"×": "*", "÷": "/", "−": "-"}))
+    expression = expression.strip().translate(OPERATORS)
     expression = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", expression)
     if len(expression) > 160 or not re.fullmatch(r"[\d.+*/()\s-]+", expression):
         raise ValueError("unsupported arithmetic")
@@ -46,8 +49,20 @@ def arithmetic_conflict(*texts: object) -> bool:
     for text in pieces:
         if not isinstance(text, str):
             continue
-        for line in re.split(r"[\n。；;：:]", text[:8000]):
-            equation = line.strip().rstrip("，,.")
+        cited = False
+        for line in re.split(r"[\n。；;]", text[:8000]):
+            line = line.strip()
+            if not line:
+                continue
+            parts = re.split(r"[：:]", line)
+            if len(parts) > 1:
+                prefix = "：".join(parts[:-1])
+                cited = bool(re.search(r"错误示例|错误算式|错误选项|错例|反例|学生原式|孩子原式|原作答|[A-H]项", prefix))
+            elif re.search(r"正确|订正|验算|检验|计算结果", line):
+                cited = False
+            if cited:
+                continue
+            equation = parts[-1].strip().rstrip("，,.").translate(OPERATORS)
             if ("=" not in equation or len(equation) > 240
                     or not re.fullmatch(r"[\d.+*/()×÷−%=\s-]+", equation)):
                 continue
@@ -65,8 +80,19 @@ def arithmetic_conflict(*texts: object) -> bool:
 def choice_letter(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    match = re.fullmatch(r"\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])[）).。\s]*", value)
-    return match[1] if match else None
+    match = re.match(r"^\s*(?:答案\s*[:：]?\s*)?(?:(?:应)?选(?:择)?|是|为)?\s*[(（]?([A-H])(.*)$", value, re.S)
+    if not match:
+        return None
+    rest = match[2].strip()
+    if not rest or re.fullmatch(r"[）).。\s]+", rest):
+        return match[1]
+    if not re.match(r"^[）).。:：，,；;（(]", rest):
+        return None
+    explanation = rest.lstrip("）).。:：，,；;（( ")
+    if (re.match(r"[A-H](?:$|[\s、，,。.)）])", explanation)
+            or re.search(r"(?:不是|不选|应选|改选|而是|或者|或)\s*[A-H]", explanation)):
+        return None
+    return match[1]
 
 
 def validated_choice_evaluation(item: dict) -> dict | None:
@@ -89,6 +115,17 @@ def validated_choice_evaluation(item: dict) -> dict | None:
 
 def false_option_is_requested(item: dict) -> bool:
     value = validated_choice_evaluation(item)
-    return bool(value and value["selection_matches"]
-                and value.get("selected_statement_truth") == "false"
-                and re.search(r"不正确|不恰当|不属于|不符合|有误|错误|不是", value["requirement"]))
+    if not value or not value["selection_matches"] or value.get("selected_statement_truth") != "false":
+        return False
+    requirement = value["requirement"]
+    # Only explicit negative asks qualify. Double negatives and an unrelated
+    # quoted statement are not evidence that the child should select a falsehood.
+    if re.search(r"[“‘\"']", requirement):
+        return False
+    for match in re.finditer(r"不正确|不恰当|不属于|不符合|有误|错误", requirement):
+        prefix = requirement[max(0, match.start() - 12):match.start()]
+        if re.search(r"(?:没有|未发现|不存在|不是|并非|不能认为|不代表).{0,6}$", prefix):
+            return False
+        if re.match(r"(?:的)?(?:一项|选项|说法|句子|表述|是|为|[（(])", requirement[match.end():]):
+            return True
+    return False

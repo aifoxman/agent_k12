@@ -59,6 +59,76 @@ def test_cached_reading_is_emitted_before_a_slow_solution_and_saved_once(prepare
     assert result[-1][1]["response"].count("先看第1题") == 1
 
 
+def test_real_sse_handler_emits_matching_reading_marks_before_solver_is_released(prepared, monkeypatch):
+    """Controlled locator and solver; exercise the real SSE request and persistence."""
+    from fastapi import UploadFile
+    _, module, child, session, _, image, _ = prepared
+    reading = {"conditions": ["本题两个部分"], "ask": "说明关系", "anchors": []}
+    with module.transaction(module.settings.database_path) as db:
+        db.execute("UPDATE prepared_questions SET reading_json=?", (json.dumps(reading),))
+    started, release = Event(), Event()
+    original_reading = module.reading_review
+    anchor = {"id": "ready-word", "text": "本题两个部分", "box": [.14, .2, .2, .03], "confidence": .99}
+
+    def read(item, frame):
+        assert frame == image
+        intro = original_reading(item, frame)
+        if intro and item.get("reading", {}).get("anchors"):
+            intro["page"] = [{"kind": "underline", "anchor_id": anchor["id"], "text": anchor["text"], "box": anchor["box"]}]
+        return intro
+
+    def annotate(frame, item, *_args):
+        assert frame == image and started.wait(3)
+        return {**item, "anchors": [anchor]}
+
+    def resolve(_session, _family, frame, target, *_args, **_kwargs):
+        assert frame == image
+        started.set()
+        assert release.wait(3), "Finished word marks were blocked behind the solve"
+        update(prepared)
+        return {**target, "solution": SOLUTION, "verification_status": "verified", "_solution_inflight": False}
+
+    monkeypatch.setattr(module, "reading_review", read)
+    monkeypatch.setattr(module, "_teaching_anchors", annotate)
+    monkeypatch.setattr(module, "_resolve_teaching_solution", resolve)
+    monkeypatch.setattr(module, "stream_teaching_beats", lambda *_a: iter([
+        ("beat", {"speech": "接着比较这两个部分的关系。", "step_id": 1, "step_end": True,
+                  "page": [], "scratch": [], "reply_mode": "none", "teaching_move": "give_clue"})]))
+    kwargs = {name: param.default.default for name, param in inspect.signature(module.stream_hint).parameters.items()
+              if hasattr(param.default, "default")}
+    claims = module.read_token(module.settings.app_secret, child["Authorization"].removeprefix("Bearer "))
+    kwargs.update(session_id=session, question="读题并说明解题思路", level=1,
+                  image=UploadFile(file=io.BytesIO(image), filename="paper.jpg",
+                                   headers=module.Headers({"content-type": "image/jpeg"})), claims=claims)
+    response = module.stream_hint(**kwargs)
+
+    async def receive():
+        result, reading_key = [], None
+        async for frame in response.body_iterator:
+            if frame.startswith(":"):
+                continue
+            kind = frame.split("\n", 1)[0].removeprefix("event: ")
+            data = json.loads(frame.split("data: ", 1)[1])
+            result.append((kind, data))
+            if kind == "beat" and data.get("phase") == "reading":
+                reading_key = data["reading_key"]
+            if kind == "reading_marks":
+                assert data["reading_key"] == reading_key and not release.is_set()
+                assert data["page"][0]["text"] == "本题两个部分"
+                assert all("17" not in mark.get("text", "") for mark in data["page"])
+                release.set()
+        return result
+
+    try:
+        result = asyncio.run(receive())
+        assert [kind for kind, _ in result].count("reading_marks") == 1
+        assert result[-1][0] == "done"
+        assert result[-1][1]["response"].count("先看第1题") == 1
+        assert result[-1][1]["visual_beats"][0]["page"][0]["text"] == "本题两个部分"
+    finally:
+        release.set()
+
+
 def test_inventory_caches_reading_while_the_first_solution_is_still_running(prepared, monkeypatch):
     _, module, _, session, family, image, service = prepared
     entered, release = Event(), Event()
@@ -160,6 +230,22 @@ def test_solver_timeout_is_not_swallowed_as_another_wait_cycle():
     future.set_exception(TimeoutError("solver deadline"))
     with pytest.raises(TimeoutError, match="solver deadline"):
         next(_hint_solution_events(future, lambda: None, poll_seconds=.001))
+
+
+def test_solver_completion_racing_with_poll_timeout_returns_the_completed_result():
+    from k12_server.app import _hint_solution_events
+    class RacingFuture:
+        def result(self, timeout=None):
+            if timeout is not None:
+                raise TimeoutError("poll completed just before success")
+            return SOLUTION
+
+        def done(self):
+            return True
+
+    with pytest.raises(StopIteration) as complete:
+        next(_hint_solution_events(RacingFuture(), lambda: None))
+    assert complete.value.value == SOLUTION
 
 
 @pytest.fixture

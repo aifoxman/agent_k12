@@ -24,6 +24,9 @@ def test_arithmetic_never_evaluates_unsupported_code(expression):
 @pytest.mark.parametrize("text,conflict", [
     ("验算：9+3=12。", False), ("0.1+0.2=0.3", False),
     ("12−3=8", True), ("步骤：8×6−7=42", True),
+    ("12－3＝8", True), ("错误示例：12-3=8。", False),
+    ("反例：\n12-3=8。订正：12-3=9。", False),
+    ("D项：12-3=8。", False), ("正确计算：12-3=8。", True),
     ("24÷6=4=5", True), ("3÷0=0", True),
     ("答案约为3.14≈22/7", False), ("x+2=4", False),
     ("面积为2m²=20000cm²", False), ("如果12−3=8，则不符合原条件", False),
@@ -62,6 +65,31 @@ def test_choice_metadata_cannot_override_changed_evidence_or_a_real_conflict(cha
 def test_wrong_choice_verdict_disagreeing_with_bound_comparison_is_withheld():
     item = {**choice_item(), "status": "check_again", "reason": "请核对选择"}
     assert grounded_check_status(item, [.1, .1, .1, .1]) == ("unclear", True)
+
+
+@pytest.mark.parametrize("requirement", ["没有错误的一项", "不是错误的一项", "并非错误的一项", "不是不正确的一项"])
+def test_double_negative_ask_never_authorizes_selecting_a_false_statement(requirement):
+    item = choice_item()
+    item["visible_question_text"] = requirement
+    item["choice_evaluation"]["requirement"] = requirement
+    assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "unclear"
+
+
+@pytest.mark.parametrize("answer,reference", [("D。理由正确。", "D"), ("D", "D。理由正确。"), ("（D）", "答案选D。")])
+def test_choice_binding_accepts_a_clear_letter_followed_by_explanation(answer, reference):
+    item = {**choice_item(), "answer": answer, "reference_answer": reference}
+    assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
+
+
+@pytest.mark.parametrize("answer", ["AD", "不是D，应选A", "D或A", "D，A", "D。不是D，应选A。"])
+def test_ambiguous_or_retracted_letters_do_not_bind_to_a_single_selection(answer):
+    item = {**choice_item(), "answer": answer}
+    assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "unclear"
+
+
+def test_selecting_an_incorrect_equation_may_quote_it_without_asserting_it_is_true():
+    item = {**choice_item(), "solution_steps": ["D项：12－3＝8。", "正确计算：12−3=9。"]}
+    assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
 
 
 def test_false_equation_cannot_survive_in_cached_teaching_or_grading_solution():

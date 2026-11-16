@@ -2,6 +2,7 @@
 
 import io
 import json
+import pytest
 
 from PIL import Image, ImageDraw
 
@@ -23,10 +24,13 @@ def question():
             "confidence": .96, "read_confidence": .96, "progress": "blank"}
 
 
-def test_choice_reading_never_labels_an_unchecked_option_as_a_known_fact():
+@pytest.mark.parametrize("evidence", ["下列说法不正确的一项是 A.所有鸟都会飞 B.鸟有羽毛",
+    "选出符合描述的（）A)所有鸟都会飞B)鸟有羽毛", "读一读（A）所有鸟都会飞（B）鸟有羽毛",
+    "辨一辨①所有鸟都会飞②鸟有羽毛", "判断：所有鸟都会飞"])
+def test_choice_reading_never_labels_an_unchecked_option_as_a_known_fact(evidence):
     item = question()
-    item["evidence"] = "下列说法不正确的一项是 A.所有鸟都会飞 B.鸟有羽毛"
-    item["reading"] = {"conditions": ["所有鸟都会飞"], "ask": "不正确的一项", "anchors": []}
+    item["evidence"] = evidence + "，哪一项"
+    item["reading"] = {"conditions": ["所有鸟都会飞"], "ask": "哪一项", "anchors": []}
     review = reading_review(item, paper())
     assert review["scratch"][0]["text"] == "材料：所有鸟都会飞"
     assert "原题写的是" in review["speech"]

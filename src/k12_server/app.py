@@ -2626,7 +2626,13 @@ def _hint_solution_events(future, annotations, *, poll_seconds=.15, heartbeat_se
             result = future.result(timeout=poll_seconds)
         except FutureTimeoutError:
             if future.done():
-                raise  # A worker timeout is an error, not an unfinished future.
+                # Completion can race with the polling deadline. Retrieving
+                # again distinguishes success from a real worker exception.
+                result = future.result()
+                update = annotations()
+                if update:
+                    yield _hint_event("reading_marks", update)
+                return result
         else:
             update = annotations()
             if update:
@@ -2973,6 +2979,14 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     return None
                 annotations_published = True
                 try:
+                    active = one("SELECT status FROM sessions WHERE id=? AND family_id=?", (session_id, family["id"]))
+                    if not active or active["status"] != "active":
+                        return None
+                    if item.get("page_id"):
+                        reader = getattr(page_preparation(), "teaching_question", None)
+                        if callable(reader) and not reader(session_id, family["id"], item.get("_prepared_image", image_bytes),
+                                                           item["id"], wait_seconds=0):
+                            return None
                     annotated = with_anchors(item)
                     if not reading_beats:
                         return None

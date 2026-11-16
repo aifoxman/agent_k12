@@ -72,7 +72,8 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     compact = lambda value: re.sub(r"\s+", "", value)
     grounded = lambda text: any(compact(a["text"]) in compact(text) for a in anchors)
     conditions = list(reading["conditions"])
-    choice_material = bool(re.search(r"(?:^|[\s，。；;])A[.．、]|[A-H]项|不正确|错误的(?:一项|说法)", question["evidence"]))
+    choice_material = bool(re.search(r"(?<![A-Za-z])[A-H][.．、)）]|[（(][A-H][)）]|[①②③④⑤⑥]|"
+                                     r"[A-H]项|判断|正确|错误|说法|表述|选择|选出|选项", question["evidence"]))
     condition_lead = "原题写的是" if choice_material else "题目告诉我们"
     ask_lead = "要我们判断的是" if choice_material else "要我们求的是"
     # Begin with a real cue the child can see immediately. This changes only
