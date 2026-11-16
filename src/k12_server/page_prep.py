@@ -114,6 +114,7 @@ def inventory_page(settings: Settings, image: bytes,
     instruction = (
         "通读照片中的全部可读作业，先分左右页、栏和题组，再按各页实际阅读顺序列出最小可独立求助的小题。"
         "印刷题号须保留父子层级，例如 ['二','3','（1）']；不要逐行横跳混读双页。"
+        "确实没有印刷题号时path=[]、label=未编号题，不能编造题号；仍逐题完整读取和定位。"
         "区分 printed 题干、孩子笔迹和示例；只抄确实可见的条件、选项与图形信息，不能补全遮挡。"
         "progress 只能是 done、partial、blank、occluded；空白不等于孩子卡题。"
         "返回 JSON：{\"questions\":[{\"path\":[\"二\",\"3\",\"（1）\"],\"label\":\"二、3、（1）\","
@@ -178,16 +179,23 @@ def inventory_page(settings: Settings, image: bytes,
         path = item.get("path")
         evidence = str(item.get("evidence") or "").strip()[:1200]
         confidence = bounded_confidence(item.get("confidence"))
-        if (not box or not isinstance(path, list) or not path or
+        if (not box or not isinstance(path, list) or
                 confidence < .65 or len(evidence) < 4):
             dropped["box" if not box else "fields"] += 1
             return
+        if not path:
+            # A virtual identity is for storage, never a claimed printed number.
+            if any(entry["evidence"] == evidence and all(abs(a - b) < .02
+                   for a, b in zip(entry["box"], box)) for entry in found):
+                return
+            path = [f"@unlabeled:{len(found) + 1}"]
         if any(entry["path"] == [str(part).strip()[:40] for part in path[:5]] for entry in found):
             return
         progress = item.get("progress")
         found.append({
             "path": [str(part).strip()[:40] for part in path[:5]],
-            "label": str(item.get("label") or "、".join(path)).strip()[:120],
+            "label": ("未编号题" if path[0].startswith("@unlabeled:")
+                      else str(item.get("label") or "、".join(path)).strip()[:120]),
             "evidence": evidence,
             "box": box,
             "progress": progress if progress in {"done", "partial", "blank", "occluded"}
@@ -254,8 +262,7 @@ def inventory_page(settings: Settings, image: bytes,
                                ["choices"][0]["message"]["content"])
     else:
         raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])
-    for item in (raw.get("questions") or [])[:60]:
-        accept(item)
+    accept(raw)  # Both a questions envelope and a complete single JSONL item.
     return found
 
 
@@ -381,6 +388,8 @@ def assess_spoken_answer(settings: Settings, question: dict, solution: dict,
 
 def _number(value: str) -> int | None:
     value = str(value).strip()
+    if value.startswith("@unlabeled:"):
+        return None
     digits = re.search(r"\d+", value)
     if digits:
         return int(digits.group())

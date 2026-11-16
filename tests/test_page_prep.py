@@ -53,6 +53,24 @@ def test_generic_method_words_cannot_silently_choose_question_one():
     assert choose_question(questions, "研学挑战、2")["id"] == "two"
 
 
+def test_streamed_unnumbered_questions_keep_distinct_nonprinted_identities(monkeypatch):
+    item = {"path": [], "label": "未编号题", "evidence": "完整可见的题干条件",
+            "box": [.1, .1, .8, .2], "progress": "blank", "confidence": .99}
+    other = {**item, "box": [.1, .6, .8, .2]}
+    monkeypatch.setattr(page_prep, "stream_model", lambda *_a: iter([
+        json.dumps(item) + "\n" + json.dumps(item) + "\n" + json.dumps(other) + "\n"]))
+    monkeypatch.setattr(page_prep, "post_model", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("No fallback needed")))
+    image = BytesIO()
+    Image.new("RGB", (1000, 1000), "white").save(image, "JPEG")
+    items = page_prep.inventory_page(SimpleNamespace(ai_model="model"), image.getvalue(), on_question=lambda *_a: None)
+    assert len(items) == 2
+    assert items[0]["path"] != items[1]["path"]
+    assert all(page_prep._number(q["path"][0]) is None for q in items)
+    assert all(q["label"] == "未编号题" for q in items)
+    questions = [{**q, "id": str(i), "ordinal": i, "read_confidence": .99} for i, q in enumerate(items)]
+    assert choose_question(questions, "第1题", spoken=True) is None
+
+
 def test_page_fingerprint_accepts_new_ink_but_rejects_changed_layout():
     def fingerprint(offset=0, handwriting=False):
         page = Image.new("RGB", (900, 1200), "white")
