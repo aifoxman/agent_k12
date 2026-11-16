@@ -202,3 +202,36 @@ def test_isolated_secret_survives_restart_without_sharing_family_credentials(tmp
     assert secret_for_run(tmp_path / "run1") == first
     assert secret_for_run(tmp_path / "run2") != first
     assert len(first) >= 48
+
+
+def test_physical_fallback_and_tts_calls_share_budget_and_worker_trace(monkeypatch, tmp_path):
+    import httpx
+    from types import SimpleNamespace
+    from k12_server import ai, tts
+    from scripts.question_bank.transport import TRACE, install
+    attempts = []
+    def post(url, **kwargs):
+        attempts.append(kwargs["json"]["model"])
+        data = {"error": {"code": "model_not_found"}} if len(attempts) == 1 else {"model": "gpt-6-astra", "usage": {"prompt_tokens": 5}}
+        return httpx.Response(503 if len(attempts) == 1 else 200, json=data, request=httpx.Request("POST", url))
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "stream", httpx.stream)
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", ThreadPoolExecutor.submit)
+    monkeypatch.setattr(tts, "tencent_audio", lambda *_a, **_k: iter([b"pcm"]))
+    monkeypatch.setattr(tts, "provider_audio", tts.provider_audio)
+    path = tmp_path / "attempts.jsonl"
+    install(tmp_path / "budget.sqlite3", 1, path)
+    token = TRACE.set("test:owned-case")
+    try:
+        settings = SimpleNamespace(ai_api_url="https://example.invalid", ai_api_key="test-secret", ai_timeout_seconds=5)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            observed = pool.submit(lambda: (TRACE.get(), ai.post_model(settings, {"model": "gpt-6.1-sol", "question": "PRIVATE_QUESTION"}))).result()
+        assert observed[0] == "test:owned-case"
+        assert attempts == ["gpt-6.1-sol", "gpt-6-astra"]
+        assert list(tts.tencent_audio()) == [b"pcm"]
+    finally:
+        TRACE.reset(token)
+    assert Budget(tmp_path / "budget.sqlite3").summary()["counts"] == [{"round": 1, "kind": "upstream", "count": 3}]
+    text = path.read_text(encoding="utf-8")
+    assert "PRIVATE_QUESTION" not in text and "test-secret" not in text
+    assert all(json.loads(line)["trace"] == "test:owned-case" for line in text.splitlines())
