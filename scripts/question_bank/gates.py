@@ -34,5 +34,5 @@ def apply(record: dict, assessment: dict) -> dict:
     assessment["deterministic_checks"] = issues
     if issues:
         assessment["verdict"] = "fail"
-        assessment["findings"] = [*(assessment.get("findings") or []), *issues]
+        assessment["findings"] = [*[f for f in assessment.get("findings", []) if f.get("source") != "deterministic_gate"], *issues]
     return assessment

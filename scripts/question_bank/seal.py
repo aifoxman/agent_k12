@@ -20,7 +20,8 @@ def freeze(output: Path, current: Path):
     if path.exists():
         raise ValueError("The final comparison is already sealed")
     value = {"baseline": source_hash(output / "private" / "baseline-src" / "k12_server"),
-             "candidate": source_hash(current), "tags": {"holdout-baseline": "baseline", "holdout-candidate": "candidate"}}
+             "candidate": source_hash(current), "evaluator": source_hash(Path(__file__).parent),
+             "tags": {"holdout-baseline": "baseline", "holdout-candidate": "candidate"}}
     dump(path, value)
     return value
 
@@ -29,6 +30,8 @@ def verify(output: Path, tag: str, current: Path, actual_source: str | None = No
     value = read(output / "private" / "holdout" / "comparison-seal.json")
     if source_hash(current) != value["candidate"]:
         raise ValueError("Backend changed after final holdout comparison was sealed")
+    if source_hash(Path(__file__).parent) != value["evaluator"]:
+        raise ValueError("Evaluator changed after final holdout comparison was sealed")
     side = value["tags"].get(tag)
     if not side or actual_source is not None and actual_source != value[side]:
         raise ValueError("Holdout tag or actual server source does not match the sealed comparison")

@@ -18,7 +18,7 @@ from scripts.question_bank.budget import Budget
 from scripts.question_bank.corpus import dump, read
 from scripts.question_bank.gates import apply as apply_gates
 from scripts.question_bank.simulation import safe_image
-from scripts.question_bank.teacher import RUBRIC, assess_review, call_teacher, distill
+from scripts.question_bank.teacher import RUBRIC, RUBRIC_VERSION, assess_review, call_teacher, distill, evaluation_contract
 
 SUBJECT_LABELS = {"math": "数学", "chinese": "语文", "english": "英语", "science": "科学"}
 GRADE_LABELS = dict(enumerate(["", *[n + "年级" for n in "一二三四五六"]]))
@@ -306,9 +306,13 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
             return None
         destination = base / "reviews" / tag / path.name
         if destination.exists():
-            assessment = apply_gates(record, read(destination))
-            dump(destination, assessment)
-            return assessment
+            prior = read(destination)
+            if prior.get("rubric_version") == RUBRIC_VERSION:
+                assessment = apply_gates(record, prior)
+                dump(destination, assessment)
+                return assessment
+            archive = base / "private" / "prior-reviews" / tag / (path.stem + "." + prior.get("rubric_version", "legacy") + ".json")
+            dump(archive, prior)
         from scripts.question_bank.gates import hard_checks
         if record.get("error") or hard_checks(record):
             assessment = {"verdict": "fail", "reference_reliable": False, "scores": {},
@@ -322,12 +326,16 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                 try:
                     assessment = call_teacher(settings, Budget(output / "budget.sqlite3"), round_id,
                         f"review:{tag}:{record['case_id']}:{record['mode']}", RUBRIC,
-                        {"grade": record["grade"], "subject": record["subject"], "mode": record["mode"],
+                        {"evaluation_contract": evaluation_contract(record["mode"]),
+                         "grade": record["grade"], "subject": record["subject"], "mode": record["mode"],
                          "reference": oracle, "observed": record["response"], "api_timings": record.get("timings"),
                          "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
                          safe_image(output, record["image"]))
-                    assessment = assess_review(assessment, record["response"])
-                    break
+                    assessment = assess_review(assessment, record["response"], record["mode"])
+                    if not assessment.get("mode_conflict") or _attempt == 1:
+                        break
+                    errors.append({"attempt": _attempt + 1, "error": "teacher_mode_conflict"})
+                    dump(base / "private" / "review-adjudications" / tag / (path.stem + f".attempt-{_attempt + 1}.json"), assessment)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                     errors.append({"attempt": _attempt + 1, "error": type(exc).__name__})
                     dump(base / "private" / "review-errors" / tag / path.name, errors)
@@ -335,7 +343,7 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                 assessment = {"verdict": "needs_review", "reference_reliable": False, "scores": {},
                               "findings": [], "mean_score": None, "review_service_errors": errors}
         assessment = apply_gates(record, assessment)
-        assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"])
+        assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"], rubric_version=RUBRIC_VERSION)
         dump(destination, assessment)
         if split == "development":
             distill(record, assessment, output / "distillation" / tag / path.name)

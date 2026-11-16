@@ -16,7 +16,7 @@ from scripts.question_bank.corpus import docx_content, inferred_subject, invento
 from scripts.question_bank.prepare import group_cases
 from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
 from scripts.question_bank.simulation import percentile, safe_image
-from scripts.question_bank.teacher import arithmetic, assess_review, distill, validate_oracle
+from scripts.question_bank.teacher import arithmetic, assess_review, distill, evaluation_contract, validate_oracle
 
 
 def test_source_answers_are_separated_even_when_filename_has_no_answer(tmp_path):
@@ -155,6 +155,19 @@ def test_critical_error_cannot_be_hidden_by_perfect_teacher_scores():
     assert assess_review(review)["verdict"] == "needs_review"
     review.update(reference_reliable=True, scores={"accuracy": 5})
     assert assess_review(review)["verdict"] == "needs_review"
+
+
+def test_grading_blank_is_authorized_to_show_answers_and_not_a_first_tier():
+    contract = evaluation_contract("blank")
+    assert contract["task"] == "correction" and contract["allow_final_answers"]
+    assert not contract["answer_withholding_rule_applies"]
+    assert evaluation_contract("hint1")["answer_withholding_rule_applies"]
+    review = {"verdict": "fail", "mode_understood": "hint1", "reference_reliable": True,
+              "scores": dict.fromkeys(("accuracy", "reasoning", "age_fit", "visual_structure", "coherence"), 5),
+              "findings": [{"severity": "critical", "quote": "6", "reason": "First tier reveals the answer"}],
+              "hard_checks": {"answer_permission": "fail"}}
+    corrected = assess_review(review, {"reference_answer": "6"}, "blank")
+    assert corrected["verdict"] == "needs_review" and corrected["mode_conflict"]
 
 
 def test_waiting_status_and_target_box_are_not_effective_teaching():
