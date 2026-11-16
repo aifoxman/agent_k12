@@ -450,8 +450,16 @@ def grounded_check_status(item: dict, box: list[float] | None,
     explanation = " ".join((str(item.get("reason", "")),
                             str(item.get("explanation", "")),
                             str(item.get("comparison", ""))))
-    for negation in ("没有错误", "未发现错误", "无错误", "不是错误"):
-        explanation = explanation.replace(negation, "")
+    # A positive assessment such as “没有计算错误” must not trigger the
+    # contradiction gate merely because it contains “错误”. Keep disputed
+    # negatives (“不能说没有计算错误”) and any later actual error intact.
+    def negated_error(match):
+        prefix = re.split(r"[，,。；;！？!?]", explanation[:match.start()])[-1]
+        return match.group() if any(word in prefix for word in (
+            "并非", "不是", "不能", "未必", "无法", "不代表", "不意味着", "可能", "或许",
+        )) else ""
+    explanation = re.sub(r"(?:没有|未发现|未见|无|不存在)(?:计算|运算|书写|抄写|数数|计数|单位){0,2}(?:错误|差错)|不是错误|并未(?:算错|写错|答错)",
+                         negated_error, explanation)
     if status == "looks_correct" and any(word in explanation for word in (
         "写错", "算错", "答错", "错误", "有误", "不正确", "应改", "需要改",
         "应订正", "答案不符", "与题意不符", "不符合题目",
@@ -1860,6 +1868,7 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
             "\"evidence\":题干及书写或留白的可见依据,"
             "\"reason\":简短判断理由,\"next_step\":给孩子的一步建议,"
             "\"explanation\":一句话解题概述,\"question_complete\":布尔值,"
+            "\"question_box\":[x,y,宽,高]或null,\"visible_question_text\":本局部可见的原题连续原文,"
             "\"solution_confidence\":0到1,\"reference_answer\":独立求出的标准答案或开放题参考表达,"
             "\"solution_idea\":解题思路,\"solution_steps\":[可复核的简短步骤],"
             "\"comparison\":逐项对照孩子写出的答案和步骤,\"diagram\":示意图或null,"
@@ -1870,6 +1879,9 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
             "客观题须给出标准答案、解题思路、可核验的关键步骤和具体差异；"
             "开放题注明参考表达并允许其他合理答案。步骤是教学解法，不输出内部推理记录。"
             "只有题干、条件、选项和必要图形（含手绘图）全部可读时 question_complete=true；"
+            "question_box框住最后一张局部图中实际可见的本题题干和选项，不能借整体参考图补全坐标；"
+            "题干被裁断时仍记录可见残片的位置和连续原文，question_complete=false。"
+            "visible_question_text只抄可见原题，不含学生答案、推测或解释；无法可靠定位则留空和null。"
             "只有可独立核验解法时才填写参考答案并给高 solution_confidence。"
             "不完整或有歧义时这些字段留空，不能把孩子的答案冒充标准答案。"
             "能看见一道真实书面题却不能可靠求解时，仍须在 checks 返回该题，标为 unclear，"
@@ -2047,6 +2059,9 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
                 if conflict:
                     reason = "模型结论与文字解释冲突，请对照原题复核。" + reason
                 normalized["checks"].append({
+                    "_question_complete": item.get("question_complete"),
+                    "_question_box": normalized_box(item.get("question_box")),
+                    "_visible_question_text": str(item.get("visible_question_text") or "")[:1000],
                     "question": str(item.get("question", "未定位题目"))[:100],
                     "status": status,
                     "answer": child_answer_text(item)[:200],

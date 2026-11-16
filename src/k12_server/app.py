@@ -2094,7 +2094,7 @@ def correct_page(session_id: str, image: UploadFile = File(...), task_id: str | 
         elif discussion_count:
             summary += "开放表达请查看讨论建议，不以对错结论代替家长复核。"
         elif unclear_count:
-            summary += "请拍清问号位置后再试。"
+            summary += "未确定项目请查看具体原因，按提示复核或补拍。"
         else:
             summary += "可任选一题，对照题目要求再自查。"
     else:

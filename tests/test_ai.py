@@ -682,6 +682,22 @@ def test_conflicting_judgment_is_withheld_without_another_model_call():
     assert grounded_check_status(item, [.2, .2, .1, .1]) == ("looks_correct", False)
 
 
+@pytest.mark.parametrize("reason,expected", [
+    ("没有计算错误，运算顺序正确。", ("looks_correct", False)),
+    ("未发现运算错误。", ("looks_correct", False)),
+    ("不存在单位错误。", ("looks_correct", False)),
+    ("没有计算错误，但单位有误。", ("unclear", True)),
+    ("不是没有错误。", ("unclear", True)),
+    ("不能说没有计算错误。", ("unclear", True)),
+    ("可能没有错误。", ("unclear", True)),
+    ("并未算错，已核对题目要求。", ("looks_correct", False)),
+])
+def test_conflict_gate_respects_bounded_negation_without_proving_correctness(reason, expected):
+    item = {"status": "looks_correct", "confidence": .95, "answer": "visible answer",
+            "evidence": "visible question and answer", "reason": reason}
+    assert grounded_check_status(item, [.2, .2, .1, .1]) == expected
+
+
 def test_blank_evidence_and_nonfinite_confidence_cannot_produce_a_check_mark():
     item = {"status": "looks_correct", "confidence": .95, "answer": "42",
             "evidence": "  ", "reason": "答案相符"}

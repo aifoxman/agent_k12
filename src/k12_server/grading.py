@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 from collections.abc import Iterable
 
 from PIL import Image, UnidentifiedImageError
@@ -147,6 +148,27 @@ def _flag_ambiguous_marks(checks: list[dict]) -> None:
         _withhold_solution(check)
 
 
+def _covered_fragment(fragment: dict, complete: dict) -> bool:
+    """Only discard an unwritten crop fragment with unique spatial/text proof."""
+    if (fragment.get("status") != "unclear" or fragment.get("answer")
+            or fragment.get("_question_complete") is not False
+            or complete.get("_question_complete") is not True
+            or complete.get("status") not in {"looks_correct", "check_again", "needs_discussion"}
+            or fragment.get("_source_region") == complete.get("_source_region")):
+        return False
+    a, b = fragment.get("_question_box"), complete.get("_question_box")
+    if not a or not b:
+        return False
+    area = a[2] * a[3]
+    overlap = (max(0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
+               * max(0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])))
+    if not area or overlap / area < .8:
+        return False
+    literal = lambda text: re.sub(r"[^\w\u4e00-\u9fff]", "", text)
+    text = literal(fragment.get("_visible_question_text", ""))
+    return len(text) >= 10 and text in literal(complete.get("_visible_question_text", ""))
+
+
 def merge_correction_regions(items: Iterable[tuple[Region, dict]]) -> dict:
     """Map model marks to the original screenshot and flag conflicting duplicates."""
     results = list(items)
@@ -159,6 +181,8 @@ def merge_correction_regions(items: Iterable[tuple[Region, dict]]) -> dict:
         for original in result.get("checks", []):
             check = dict(original)
             check["box"] = _full_box(check.get("box"), region)
+            check["_question_box"] = _full_box(check.get("_question_box"), region)
+            check["_source_region"] = region
             check["steps"] = [
                 {**step, "box": _full_box(step.get("box"), region)}
                 for step in check.get("steps", [])
@@ -181,6 +205,14 @@ def merge_correction_regions(items: Iterable[tuple[Region, dict]]) -> dict:
                     duplicate.update(check)
                 continue
             checks.append(check)
+    covered = [check for check in checks if sum(_covered_fragment(check, other)
+               for other in checks if other is not check) == 1]
+    if covered:
+        checks = [check for check in checks if not any(check is item for item in covered)]
+        estimated_total -= len(covered)
+    for check in checks:
+        for field in ("_question_box", "_question_complete", "_visible_question_text", "_source_region"):
+            check.pop(field, None)
     _flag_ambiguous_marks(checks)
     first = results[0][1]
     return {

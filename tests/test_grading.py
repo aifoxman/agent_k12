@@ -93,3 +93,25 @@ def test_opposite_verdicts_on_the_same_area_are_not_shown_as_confident_marks():
     ]})])
     assert [item["status"] for item in result["checks"]] == ["unclear", "unclear"]
     assert all("高度重叠" in item["reason"] for item in result["checks"])
+
+
+def test_incomplete_crop_is_removed_only_with_unique_printed_and_spatial_proof():
+    complete = {"question": "3", "status": "check_again", "answer": "", "box": [.2, .89, .2, .05],
+                "_question_complete": True, "_question_box": [.1, .78, .8, .15],
+                "_visible_question_text": "十位是9，百位和个位是5。A.559 B.595 C.955", "steps": []}
+    fragment = {"question": "top fragment", "status": "unclear", "answer": "", "box": None,
+                "_question_complete": False, "_question_box": [.1, 0, .8, .1],
+                "_visible_question_text": "A.559 B.595 C.955", "steps": []}
+    def merged(part, other=complete):
+        return merge_correction_regions([
+            ((0, 0, 1, .55), {"checks": [other], "visible_answer_count": 1, "confidence": .9}),
+            ((0, .45, 1, .55), {"checks": [part], "visible_answer_count": 1, "confidence": .9}),
+        ])
+    result = merged(fragment)
+    assert len(result["checks"]) == result["visible_answer_count"] == 1
+    assert not any(key.startswith("_") for key in result["checks"][0])
+    assert len(merged({**fragment, "_question_box": None})["checks"]) == 2
+    assert len(merged({**fragment, "_visible_question_text": "A.111 B.222 C.333"})["checks"]) == 2
+    assert len(merged({**fragment, "_question_box": [.1, .6, .8, .1]})["checks"]) == 2
+    assert len(merged({**fragment, "answer": "different visible answer"})["checks"]) == 2
+    assert len(merged(fragment, {**complete, "_question_complete": False})["checks"]) == 2
