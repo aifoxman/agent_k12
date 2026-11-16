@@ -320,6 +320,8 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                           "unassessed": ["Content not scored because observable delivery gates failed."]}
         else:
             oracle = read(base / "private" / "oracles" / f"{record['case_id']}.json")
+            teacher_reference = {key: value for key, value in oracle.items()
+                                 if key not in {"wrong_answer", "wrong_reason", "crop", "source_path"}}
             assessment = None
             errors = []
             for _attempt in range(2):
@@ -327,8 +329,9 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                     assessment = call_teacher(settings, Budget(output / "budget.sqlite3"), round_id,
                         f"review:{tag}:{record['case_id']}:{record['mode']}", RUBRIC,
                         {"evaluation_contract": evaluation_contract(record["mode"]),
-                         "grade": record["grade"], "subject": record["subject"], "mode": record["mode"],
-                         "reference": oracle, "observed": record["response"], "api_timings": record.get("timings"),
+                         "task_kind": evaluation_contract(record["mode"])["task"],
+                         "grade": record["grade"], "subject": record["subject"],
+                         "reference": teacher_reference, "observed": record["response"], "api_timings": record.get("timings"),
                          "visual_evidence": "API structure only; actual display and audio synchrony unassessed"},
                          safe_image(output, record["image"]))
                     assessment = assess_review(assessment, record["response"], record["mode"])
