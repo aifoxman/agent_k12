@@ -194,8 +194,8 @@ def inventory_page(settings: Settings, image: bytes,
         progress = item.get("progress")
         found.append({
             "path": [str(part).strip()[:40] for part in path[:5]],
-            "label": ("未编号题" if path[0].startswith("@unlabeled:")
-                      else str(item.get("label") or "、".join(path)).strip()[:120]),
+            "label": ("未编号题" if str(path[0]).startswith("@unlabeled:")
+                      else str(item.get("label") or "、".join(str(part) for part in path)).strip()[:120]),
             "evidence": evidence,
             "box": box,
             "progress": progress if progress in {"done", "partial", "blank", "occluded"}
