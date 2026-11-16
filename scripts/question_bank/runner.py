@@ -270,13 +270,16 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                   "completed": False, "response": {}}
         dump(path, record)
         start = time.monotonic()
+        stage = "request"
         try:
             with httpx.Client(base_url=base, timeout=240, trust_env=False) as client:
                 headers = {**child, "X-K12-Evaluation-Trace": trace, "X-K12-Evaluation-Task": str(task_reservation)}
                 if mode in {"hint1", "hint2"}:
                     if cache == "warm" and mode == "hint1":
+                        stage = "reading_preparation"
                         prepared, preparation = prewarm(client, state["session_id"], {**headers, "X-K12-Evaluation-Trace": f"prep:{trace}"}, input_bytes)
                         record["preparation"] = preparation
+                    stage = "hint_stream"
                     response, timeline, timings = hint(client, mode, state["session_id"], headers,
                         input_bytes, previous, audio_path=path.with_suffix(".pcm") if audio and mode == "hint1" else None,
                         prepared=prepared)
@@ -285,6 +288,7 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                     if response.get("delivery_complete") is False or not response.get("located"):
                         record["error"] = "incomplete_or_unlocated_teaching"
                 else:
+                    stage = "correction"
                     approval = client.patch(f"/v1/sessions/{state['session_id']}/correction-access", headers=parent, json={"allowed": True})
                     approval.raise_for_status()
                     response = client.post(f"/v1/sessions/{state['session_id']}/corrections", headers=headers,
@@ -294,6 +298,14 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
                     record["response"] = response.json()
         except Exception as exc:
             record["error"] = type(exc).__name__
+            record["error_stage"] = stage
+            if isinstance(exc, ValueError) and str(exc) in {
+                "Prepared index does not match this exact simulated frame",
+                "A genuine warm reading cache was not available",
+                "Hint stream did not deliver a done event",
+                "Warm selection must be an unambiguous backend-indexed single question",
+            }:
+                record["error_detail"] = str(exc)
             if isinstance(exc, httpx.HTTPStatusError):
                 record["http_status"] = exc.response.status_code
         record.update(completed=True, total_ms=round((time.monotonic() - start) * 1000))
