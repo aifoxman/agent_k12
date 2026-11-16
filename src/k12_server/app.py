@@ -2783,7 +2783,8 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                 else:
                     marks = parse_selected_strokes(selected_strokes)
                     mark_matcher = getattr(page_preparation(), "match_strokes", None)
-                    prepared = mark_matcher(session_id, image_bytes, marks) if mark_matcher else None
+                    prepared = (mark_matcher(session_id, image_bytes, marks)
+                                if mark_matcher and not prepared_question_id else None)
                     target_item = prepared if prepared and prepared["read_confidence"] >= .8 else None
                     located = ({"found": False} if target_item else
                                locate_question(locator_settings, image_bytes, question[:200],

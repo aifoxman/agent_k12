@@ -1077,7 +1077,12 @@ class PagePreparation:
     def match(self, session_id: str, image: bytes, reference: str,
               *, spoken: bool = False, reviewing: bool = False) -> dict | None:
         questions = self.questions_for(session_id, image)
-        return choose_question(questions, reference, spoken=spoken, reviewing=reviewing)
+        selected = choose_question(questions, reference, spoken=spoken, reviewing=reviewing)
+        if not selected:
+            return None
+        with self.lock:
+            frame = self.frames.get(selected["page_id"])
+        return selected if frame and valid_transform(frame, image, IDENTITY, selected["box"]) else None
 
     def match_strokes(self, session_id: str, image: bytes,
                       strokes: list[list[list[float]]]) -> dict | None:
@@ -1094,6 +1099,10 @@ class PagePreparation:
             scored = []
             for item in questions:
                 if item["read_confidence"] < .8 or item["progress"] == "occluded":
+                    continue
+                with self.lock:
+                    frame = self.frames.get(item["page_id"])
+                if not frame or not valid_transform(frame, image, IDENTITY, item["box"]):
                     continue
                 x, y, width, height = item["box"]
                 horizontal = max(0, min(right, x + width) - max(left, x)) / max(.001, min(right - left, width))

@@ -49,6 +49,15 @@ def test_a_smooth_local_shadow_does_not_turn_into_border_ink_or_move_the_word():
     assert accepted and accepted[0]["box"] == pytest.approx(anchor["box"], abs=1e-6)
 
 
+def test_exact_glyph_edge_has_a_small_validation_margin_but_keeps_original_coordinates():
+    picture, anchor = word_on_paper()
+    x, y, w, h = anchor["box"]
+    tight = {**anchor, "box": [x + 3 / SIZE[0], y + 3 / SIZE[1],
+                               w - 6 / SIZE[0], h - 6 / SIZE[1]]}
+    accepted = verify_teaching_anchors(encoded(picture), [tight], TARGET, "nonzero")
+    assert accepted and accepted[0]["box"] == pytest.approx(tight["box"], abs=1e-6)
+
+
 @pytest.mark.parametrize("background", [255, 170, 125, 85])
 def test_flat_empty_paper_cannot_validate_a_word_even_when_every_pixel_is_below180(background):
     picture, anchor = word_on_paper(background)

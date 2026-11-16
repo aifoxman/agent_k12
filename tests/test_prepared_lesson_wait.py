@@ -164,6 +164,7 @@ def prepared(monkeypatch, tmp_path):
             "current-question", "current-page", 0, '["1"]', "第1题", "比较本题两个部分并说明关系。",
             '[0.1,0.1,0.8,0.7]', "partial", .96, None, None, "pending"))
     service = PagePreparation(module.settings)
+    service.frames["current-page"] = image
     service.inflight.add("current-page")
     service.question_jobs.add(("current-page", 0))
     monkeypatch.setattr(module, "page_preparation", lambda: service)
