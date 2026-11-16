@@ -119,21 +119,37 @@ def teaching_stage(stage: str, **metrics) -> None:
 def post_model(settings: Settings, payload: dict, timeout: int | float | None = None,
                allow_fallback: bool = True) -> dict:
     payload = _available_payload(settings, payload)
-    response = httpx.post(
-        settings.ai_api_url,
-        headers={"Authorization": f"Bearer {settings.ai_api_key}"},
-        json=payload,
-        timeout=timeout or settings.ai_timeout_seconds,
-    )
-    if allow_fallback and payload.get("model") == "gpt-6.1-sol" and _model_unavailable_response(response):
-        _remember_unavailable(settings)
-        payload = {**payload, "model": "gpt-6-astra"}
+    timeout_budget = timeout or settings.ai_timeout_seconds
+    deadline = time.monotonic() + timeout_budget
+    request_timeout = timeout_budget
+    fallback_used, gateway_retry_used = False, False
+    while True:
         response = httpx.post(
             settings.ai_api_url,
             headers={"Authorization": f"Bearer {settings.ai_api_key}"},
             json=payload,
-            timeout=timeout or settings.ai_timeout_seconds,
+            timeout=request_timeout,
         )
+        remaining = deadline - time.monotonic()
+        unavailable = _model_unavailable_response(response)
+        if (allow_fallback and not fallback_used and payload.get("model") == "gpt-6.1-sol"
+                and unavailable and remaining > 0):
+            _remember_unavailable(settings)
+            payload = {**payload, "model": "gpt-6-astra"}
+            fallback_used = True
+            request_timeout = remaining
+            continue
+        if (not gateway_retry_used and not unavailable and response.status_code in {502, 503, 504}
+                and remaining > 1):
+            # No user-visible content exists for a non-streaming JSON request.
+            # Retry only a gateway rejection, never credentials, quota, invalid
+            # input, model configuration failures or a partially delivered stream.
+            gateway_retry_used = True
+            logger.warning("AI gateway status=%d; retrying once within the original deadline", response.status_code)
+            time.sleep(min(.25, remaining - 1))
+            request_timeout = max(.001, deadline - time.monotonic())
+            continue
+        break
     response.raise_for_status()
     data = response.json()
     family_id = _usage_family.get()
