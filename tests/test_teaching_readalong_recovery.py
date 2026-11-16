@@ -67,6 +67,21 @@ def test_optional_cold_reading_cannot_invent_conditions_or_use_low_confidence(mo
     assert located["found"] and "reading" not in located
 
 
+@pytest.mark.parametrize("label", ["", None])
+def test_a_reliably_located_unnumbered_crop_keeps_its_identity(monkeypatch, label):
+    image, anchors = paper()
+    settings = SimpleNamespace(ai_api_url="https://example.invalid/chat", ai_api_key="test", ai_model="test")
+    raw = {"found": True, "ambiguous": False, "confidence": .99, "label": label, "box": TARGET,
+           "evidence": "nonzero methods", "anchors": anchors}
+    monkeypatch.setattr(ai, "post_model", lambda *_a: {"choices": [{"message": {"content": json.dumps(raw)}}]})
+    located = ai.locate_question(settings, image, "已经选定的裁图")
+    assert located["found"] and located["label"] == "当前题" and located["box"] == TARGET
+    raw["ambiguous"] = True
+    assert not ai.locate_question(settings, image, "已经选定的裁图")["found"]
+    raw.update(ambiguous=False, evidence=None)
+    assert not ai.locate_question(settings, image, "已经选定的裁图")["found"]
+
+
 def lesson(raw, *, anchors=None, image=None, level=2, question="请完整讲解。",
            evidence=None, solution=None, tail=False):
     original_image, original_anchors = paper()

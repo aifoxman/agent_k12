@@ -1469,11 +1469,19 @@ def locate_question(settings: Settings, image: bytes, target: str,
             raise ValueError("invalid question location response")
         box = normalized_box(raw.get("box"))
         confidence = bounded_confidence(raw.get("confidence", 0))
-        label = str(raw.get("label", "")).strip()[:100]
-        evidence = str(raw.get("evidence", "")).strip()[:600]
+        raw_label = raw.get("label")
+        label = (raw_label.strip()[:100] if isinstance(raw_label, str)
+                 else str(raw_label) if type(raw_label) is int and 0 < raw_label <= 9999 else "")
+        raw_evidence = raw.get("evidence")
+        evidence = raw_evidence.strip()[:600] if isinstance(raw_evidence, str) else ""
         found = (raw.get("found") is True and raw.get("ambiguous") is not True
                  and box is not None and confidence >= (.80 if infer or marks else .72)
-                 and bool(label) and bool(evidence))
+                 and bool(evidence))
+        # Cropped worksheets legitimately omit the printed number. A missing
+        # display label cannot invalidate an otherwise independently located
+        # question; never manufacture a printed number or coerce null evidence.
+        if found and not label:
+            label = "当前题"
         result = {"found": found, "box": box if found else None,
                 "label": label if found else "", "evidence": evidence if found else "",
                 "confidence": confidence,

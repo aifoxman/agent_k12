@@ -104,6 +104,8 @@ def prepare_document(record, output: Path, settings, round_id=1):
                 crop_path.parent.mkdir(parents=True, exist_ok=True)
                 page.get_pixmap(dpi=200, clip=rect).pil_save(str(crop_path), format="JPEG", quality=96)
                 spec["crop"] = str(crop_path.relative_to(output).as_posix())
+                spec["crop_box"] = [rect.x0 / page_rect.width, rect.y0 / page_rect.height,
+                                    rect.width / page_rect.width, rect.height / page_rect.height]
                 blind = call_teacher(settings, Budget(output / "budget.sqlite3"), round_id, f"blind:{identifier}",
                     BLIND_ORACLE, {"grade": record["grade"], "subject": record["subject"]}, crop_path,
                     model=settings.ai_fast_vision_model or settings.ai_model)
@@ -191,6 +193,18 @@ def make_manifest(output: Path, font: str):
         candidates = [s for s in specs if s.get("accepted") and s.get("independent_reference_check")
                       and s.get("subject") == subject and s.get("grade") == grade]
         accepted.extend(sorted(candidates, key=lambda s: (s["case_id"] not in seen, s["case_id"]))[:count])
+    selected_ids = {s["case_id"] for s in accepted}
+    quota_gaps = [{"subject": subject, "grade": grade, "requested": count,
+                   "qualified_in_batch": sum(s.get("accepted") and s.get("independent_reference_check")
+                                             and s.get("subject") == subject and s.get("grade") == grade for s in specs)}
+                  for (subject, grade), count in quotas().items()
+                  if sum(s.get("accepted") and s.get("independent_reference_check") and s.get("subject") == subject
+                         and s.get("grade") == grade for s in specs) < count]
+    additional = [s for s in specs if s.get("accepted") and s.get("independent_reference_check")
+                  and s["case_id"] not in selected_ids]
+    additional.sort(key=lambda s: (s.get("subject") != "math", -s.get("grade", 0), s["case_id"]))
+    substitutes = additional[:max(0, 60 - len(accepted))]
+    accepted.extend(substitutes)
     groups = group_cases(accepted)
     # Round-robin strata before deterministic group selection preserves grade/subject breadth.
     strata = {}
@@ -230,6 +244,12 @@ def make_manifest(output: Path, font: str):
                 student_paper(crop, "", font, variant=variant, seed=identifier).save(path, quality=90)
                 images[variant] = path.relative_to(output).as_posix()
             oracle = {k: v for k, v in spec.items() if not k.startswith("_")}
+            if split == "holdout":
+                old_crop = output / oracle["crop"]
+                sealed_crop = base / "private" / "crops" / old_crop.name
+                sealed_crop.parent.mkdir(parents=True, exist_ok=True)
+                old_crop.replace(sealed_crop)
+                oracle["crop"] = sealed_crop.relative_to(output).as_posix()
             dump(base / "private" / "oracles" / f"{identifier}.json", oracle)
             cases.append({"id": identifier, "grade": spec["grade"], "subject": spec["subject"],
                           "type": spec.get("type"), "split": split,
@@ -240,10 +260,13 @@ def make_manifest(output: Path, font: str):
         dump(base / "manifest.json", manifest)
         manifests[split] = {"count": len(cases)}
     # Remove temporary mixed specs once split is sealed; keep only in their protected split.
-    for directory in (output / "private" / "specs", output / "private" / "crops"):
-        for path in directory.glob("*"):
-            if path.is_file():
-                path.unlink()
+    included = {s["case_id"] for s in accepted}
+    for path in (output / "private" / "specs").glob("*.json"):
+        if path.stem not in included:
+            dump(output / "private" / "excluded" / path.name, read(path))
+        path.unlink()
     dump(output / "coverage.json", {"requested": 60, "accepted": total,
-                                    "unavailable": 60 - total, "splits": manifests})
+                                    "unavailable": 60 - total, "splits": manifests,
+                                    "quota_gaps": quota_gaps,
+                                    "substitutions": [{k: s[k] for k in ("case_id", "subject", "grade")} for s in substitutes]})
     return manifests
