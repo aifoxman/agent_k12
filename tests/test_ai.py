@@ -718,6 +718,10 @@ def test_critical_language_read_is_blind_and_disagreement_cannot_drive_a_lesson(
     ("并未算错，已核对题目要求。", ("looks_correct", False)),
     ("这些问题属于未选项，不是孩子答案中的错误。", ("looks_correct", False)),
     ("不能说这不是孩子答案中的错误。", ("unclear", True)),
+    ("未选项的错字属于原题，不是你的作答错误。", ("looks_correct", False)),
+    ("并非你的作答有误。", ("looks_correct", False)),
+    ("不能说这不是你的作答错误。", ("unclear", True)),
+    ("不是你的作答错误，但单位有误。", ("unclear", True)),
 ])
 def test_conflict_gate_respects_bounded_negation_without_proving_correctness(reason, expected):
     item = {"status": "looks_correct", "confidence": .95, "answer": "visible answer",
