@@ -563,6 +563,8 @@ def test_parent_model_token_usage_tracks_provider_counts_and_local_periods(monke
     ai = importlib.import_module("k12_server.ai")
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 

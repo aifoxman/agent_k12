@@ -84,6 +84,20 @@ def _remember_unavailable(settings: Settings) -> None:
     logger.warning("gpt-6.1-sol routing or pricing is unavailable; using gpt-6-astra for five minutes")
 
 
+def _temporary_gateway_error(response: httpx.Response) -> bool:
+    if response.status_code not in {502, 503, 504}:
+        return False
+    try:
+        error = response.json().get("error")
+        code = (error.get("code") or error.get("type")) if isinstance(error, dict) else None
+    except (ValueError, AttributeError, TypeError):
+        code = None
+    return not code or str(code).lower() in {
+        "server_error", "service_unavailable", "upstream_error", "upstream_timeout",
+        "bad_gateway", "gateway_timeout", "overloaded_error", "temporarily_unavailable",
+    }
+
+
 def set_usage_family(family_id: str) -> None:
     """Attach the authenticated family to model calls in this request's worker context."""
     _usage_family.set(family_id)
@@ -139,7 +153,7 @@ def post_model(settings: Settings, payload: dict, timeout: int | float | None = 
             fallback_used = True
             request_timeout = remaining
             continue
-        if (not gateway_retry_used and not unavailable and response.status_code in {502, 503, 504}
+        if (not gateway_retry_used and not unavailable and _temporary_gateway_error(response)
                 and remaining > 1):
             # No user-visible content exists for a non-streaming JSON request.
             # Retry only a gateway rejection, never credentials, quota, invalid

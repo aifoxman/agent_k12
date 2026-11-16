@@ -247,6 +247,8 @@ def test_question_locator_requires_visible_unique_evidence(monkeypatch):
     sent = []
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -829,6 +831,8 @@ def test_correction_downgrades_uncertain_or_unsupported_checks(monkeypatch):
     }
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -875,6 +879,8 @@ def test_correction_covers_both_columns_of_24_question_page(monkeypatch):
     }
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -932,6 +938,8 @@ def test_page_scan_keeps_two_separate_readable_pages_and_rejects_guesswork(monke
     }
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 

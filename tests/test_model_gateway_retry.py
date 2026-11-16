@@ -46,6 +46,15 @@ def test_nontransient_errors_never_retry(provider, status):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("code", ["insufficient_quota", "billing_hard_limit_reached", "invalid_api_key", "model_not_found"])
+def test_business_errors_mapped_to_503_do_not_retry(provider, code):
+    settings, calls, _, setup = provider
+    setup([(503, {"error": {"code": code}})])
+    with pytest.raises(httpx.HTTPStatusError):
+        ai.post_model(settings, {"model": "gpt-6-astra"})
+    assert len(calls) == 1
+
+
 def test_explicit_model_unavailability_keeps_existing_fallback_semantics(provider):
     settings, calls, _, setup = provider
     setup([(503, {"error": {"code": "model_not_found"}}), (200, {"model": "gpt-6-astra"})])
