@@ -21,7 +21,8 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from .config import Settings
 from .answer_validation import (
-    arithmetic_conflict, choice_comparison_conflict, choice_letter, false_option_is_requested, validated_choice_evaluation,
+    arithmetic_conflict, choice_comparison_conflict, choice_letter, false_option_is_requested,
+    positive_student_verdict, validated_choice_evaluation,
 )
 from .db import transaction
 from .teaching_alignment import (
@@ -499,9 +500,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
         "应订正", "答案不符", "与题意不符", "不符合题目",
     )):
         return "unclear", True
-    if status == "check_again" and any(word in explanation for word in (
-        "孩子答案正确", "作答正确", "书写正确", "全部正确", "结果正确", "孩子答对",
-    )):
+    if status == "check_again" and positive_student_verdict(explanation):
         return "unclear", True
     return status, False
 

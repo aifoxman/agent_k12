@@ -162,6 +162,20 @@ def choice_comparison_conflict(item: dict) -> bool:
     return False
 
 
+def positive_student_verdict(text: str) -> bool:
+    """An option being spelled correctly is not a verdict on the child's answer."""
+    for clause in re.split(r"[，,。；;！？!?\n]", text):
+        for match in re.finditer(r"(?:孩子|学生|你|纸面)(?:的)?(?:答案|作答|解答)?"
+                                 r"(?:全都|全部|完全|均|是)?(?:正确|无误|答对了?)", clause):
+            prefix = clause[max(0, match.start() - 10):match.start()]
+            if not re.search(r"不是|并非|不能说|不能认为|未必|如果|假如|是否|可能", prefix):
+                return True
+        if re.fullmatch(r"\s*(?:本题|这道题|本次)?(?:的)?(?:作答|答案)?"
+                        r"(?:全都|全部|完全)?(?:正确|无误)\s*", clause):
+            return True
+    return False
+
+
 def false_option_is_requested(item: dict) -> bool:
     value = validated_choice_evaluation(item)
     if not value or not value["selection_matches"] or value.get("selected_statement_truth") != "false":

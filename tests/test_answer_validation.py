@@ -141,6 +141,20 @@ def test_positive_explanation_cannot_hide_an_explicit_ambiguous_single_choice(an
     assert grounded_check_status(item, [.1, .1, .1, .1]) == ("unclear", True)
 
 
+@pytest.mark.parametrize("reason,expected", [
+    ("孩子未作答，只有B组书写正确。", "check_again"),
+    ("孩子选A，B项三个词全部正确，A项有一个错字。", "check_again"),
+    ("参考答案全部正确，孩子尚未作答。", "check_again"),
+    ("孩子答案正确。", "unclear"), ("孩子答对了。", "unclear"),
+    ("作答正确。", "unclear"), ("全部正确。", "unclear"),
+    ("不是孩子答案正确，而是参考答案正确。", "check_again"),
+])
+def test_wrong_or_blank_choice_is_not_overruled_by_positive_option_analysis(reason, expected):
+    item = {"status": "check_again", "answer": "A", "confidence": .97,
+            "evidence": "完整要求、选项和作答清楚", "reason": reason}
+    assert grounded_check_status(item, [.1, .1, .1, .1])[0] == expected
+
+
 def test_false_equation_cannot_survive_in_cached_teaching_or_grading_solution():
     solution = {"answer": "8", "steps": "12−3=8", "confidence": .99, "ambiguous": False}
     assert not grounded_teaching_solution(solution, .99)
