@@ -15,12 +15,25 @@ def source_hash(directory: Path) -> str:
     return value.hexdigest()
 
 
+def dataset_hash(output: Path) -> str:
+    base = output / "private" / "holdout"
+    paths = [base / "manifest.json"] if (base / "manifest.json").exists() else []
+    for folder in ("papers", "private/oracles", "private/crops"):
+        paths.extend(p for p in (base / folder).rglob("*") if p.is_file())
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        digest.update(path.relative_to(base).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def freeze(output: Path, current: Path):
     path = output / "private" / "holdout" / "comparison-seal.json"
     if path.exists():
         raise ValueError("The final comparison is already sealed")
     value = {"baseline": source_hash(output / "private" / "baseline-src" / "k12_server"),
              "candidate": source_hash(current), "evaluator": source_hash(Path(__file__).parent),
+             "dataset": dataset_hash(output),
              "tags": {"holdout-baseline": "baseline", "holdout-candidate": "candidate"}}
     dump(path, value)
     return value
@@ -32,6 +45,8 @@ def verify(output: Path, tag: str, current: Path, actual_source: str | None = No
         raise ValueError("Backend changed after final holdout comparison was sealed")
     if source_hash(Path(__file__).parent) != value["evaluator"]:
         raise ValueError("Evaluator changed after final holdout comparison was sealed")
+    if dataset_hash(output) != value["dataset"]:
+        raise ValueError("Holdout fixtures or references changed after final comparison was sealed")
     side = value["tags"].get(tag)
     if not side or actual_source is not None and actual_source != value[side]:
         raise ValueError("Holdout tag or actual server source does not match the sealed comparison")

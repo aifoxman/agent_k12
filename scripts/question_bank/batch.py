@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from scripts.question_bank.corpus import dump, read
+from scripts.question_bank.simulation import answer_lines
 
 
 def prepare(output: Path, font_path="C:/Windows/Fonts/msyh.ttc"):
@@ -26,7 +27,7 @@ def prepare(output: Path, font_path="C:/Windows/Fonts/msyh.ttc"):
             crop = Image.open(output / oracle["crop"]).convert("RGB")
             crop = crop.resize((1280, round(crop.height * 1280 / crop.width)))
             written = oracle["answer"] if mode == "correct" else oracle["wrong_answer"] if mode == "wrong" else ""
-            lines = [written[i:i + 31] for i in range(0, len(written), 31)]
+            lines = answer_lines(written, font, 1170)
             height = 70 + crop.height + max(130, len(lines) * 52 + 50)
             block = Image.new("RGB", (1400, height), "white")
             draw = ImageDraw.Draw(block)

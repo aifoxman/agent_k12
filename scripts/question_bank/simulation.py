@@ -10,6 +10,20 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 
+def answer_lines(answer: str, font, available_width: int) -> list[str]:
+    """Preserve paragraph boundaries and wrap by actual rendered width."""
+    lines = []
+    for paragraph in answer.splitlines():
+        line = ""
+        for char in paragraph:
+            if line and font.getlength(line + char) > available_width:
+                lines.append(line)
+                line = ""
+            line += char
+        lines.append(line)
+    return lines
+
+
 def photographed(image: Image.Image, variant: str, seed: str) -> Image.Image:
     image = image.convert("RGB")
     rng = random.Random(hashlib.sha256(seed.encode()).hexdigest())
@@ -44,8 +58,7 @@ def student_paper(crop: Image.Image, answer: str, font_path: str | None, *, vari
     font_size = 38
     font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default(size=font_size)
     # The separate simulated answer area never overwrites printed source conditions.
-    lines = [answer[i:i + max(1, width // (font_size + 2) - 4)]
-             for i in range(0, len(answer), max(1, width // (font_size + 2) - 4))]
+    lines = answer_lines(answer, font, width - 210)
     answer_height = max(180, 65 + len(lines) * 54)
     sheet = Image.new("RGB", (width + 100, height + answer_height + 180), "#fdfcf8")
     draw = ImageDraw.Draw(sheet)

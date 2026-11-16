@@ -246,6 +246,34 @@ def test_fixture_path_cannot_escape_run(tmp_path):
     assert percentile([30, 10, 20], .5) == 20
 
 
+def test_simulated_answer_layout_keeps_newlines_and_rendered_text_inside_width():
+    from PIL import ImageFont
+    from scripts.question_bank.simulation import answer_lines
+    font = ImageFont.load_default(size=38)
+    text = "first answer\nsecond answer with a long explanation\nthird"
+    lines = answer_lines(text, font, 230)
+    assert "".join(lines) == text.replace("\n", "")
+    assert all("\n" not in line and font.getlength(line) <= 230 for line in lines)
+    assert lines[0] == "first answer"
+
+
+def test_final_seal_also_protects_the_actual_holdout_images(tmp_path):
+    from scripts.question_bank.seal import freeze, verify
+    current = tmp_path / "current"
+    baseline = tmp_path / "private/baseline-src/k12_server"
+    for folder in (current, baseline):
+        folder.mkdir(parents=True)
+        (folder / "app.py").write_text("backend")
+    image = tmp_path / "private/holdout/papers/case/clean.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"sealed image")
+    value = freeze(tmp_path, current)
+    verify(tmp_path, "holdout-candidate", current, value["candidate"])
+    image.write_bytes(b"replaced image")
+    with pytest.raises(ValueError, match="fixtures or references changed"):
+        verify(tmp_path, "holdout-candidate", current, value["candidate"])
+
+
 def test_final_holdout_rejects_changed_candidate_or_wrong_server(tmp_path):
     from scripts.question_bank.seal import freeze, verify
     current = tmp_path / "current"
