@@ -1254,6 +1254,15 @@ def stream_teaching_beats(settings: Settings, page_image: bytes, focus_image: by
                     "wait_for_writing/parent_handoff；reply_mode只能是spoken/writing/none。"
                     "只有确实交回孩子口述或动笔时才结束本轮；教师板书或自问自答不是孩子回合，"
                     "用reply_mode=none，继续讲完必要因果。不要在方法未解释清楚时机械抛任务结束。")
+    if not allow_final_answer:
+        instruction += (
+            "先分清题目实际要填的内容。若所求本身是运算名称、运算顺序、概念、性质或方法名称，"
+            "直接说出该规则、名称或它的等价口号就是公布答案，不能把它当作不含答案的解题方法。"
+            "此类题第一层只给观察对象、回忆方向和一个能独立尝试的线索，"
+            "语音、草稿和原图笔记都不填出所求名称或完整顺序；第二层再讲清规则、理由和填写。"
+            "数值型应用题第一层仍应讲清数量关系、所用方法及关键因果，保留最后结果，"
+            "不能因为这个特例退化为所有题都只反问或不给实质帮助。"
+        )
     details = (f"年龄段:{age_band or '未知'}；年级:{grade or '未知'}；教材:{textbook or '未知'}；"
                f"孩子本次问题:{question[:500]}；"
                f"题目:{target['label']}；纸面题干:{target['evidence']}；"
