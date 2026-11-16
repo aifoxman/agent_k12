@@ -2092,7 +2092,7 @@ def correct_page(session_id: str, image: UploadFile = File(...), task_id: str | 
                                for item in checks)
                         else "请查看下方逐题文字分析。")
         elif discussion_count:
-            summary += "开放表达请查看讨论建议，不以对错结论代替家长复核。"
+            summary += "需要讨论的项目请查看具体争议和建议，可请家长一起复核。"
         elif unclear_count:
             summary += "未确定项目请查看具体原因，按提示复核或补拍。"
         else:
