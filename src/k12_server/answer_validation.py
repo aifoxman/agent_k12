@@ -49,17 +49,18 @@ def arithmetic_conflict(*texts: object) -> bool:
     for text in pieces:
         if not isinstance(text, str):
             continue
-        cited = False
+        quoted_next = False
         for line in re.split(r"[\n。；;]", text[:8000]):
             line = line.strip()
             if not line:
                 continue
+            cited, quoted_next = quoted_next, False
             parts = re.split(r"[：:]", line)
             if len(parts) > 1:
                 prefix = "：".join(parts[:-1])
-                cited = bool(re.search(r"错误示例|错误算式|错误选项|错例|反例|学生原式|孩子原式|原作答|[A-H]项", prefix))
-            elif re.search(r"正确|订正|验算|检验|计算结果", line):
-                cited = False
+                asserted = re.search(r"(?<!不)正确计算|正确算式|订正|验算|检验|计算结果|重新计算", prefix)
+                cited = not asserted and bool(re.search(r"错误示例|错误算式|错误选项|错例|反例|学生原式|孩子原式|原作答|[A-H]项", prefix))
+                quoted_next = bool(cited and not parts[-1].strip())
             if cited:
                 continue
             equation = parts[-1].strip().rstrip("，,.").translate(OPERATORS)
@@ -92,6 +93,17 @@ def choice_letter(value: object) -> str | None:
     if (re.match(r"[A-H](?:$|[\s、，,。.)）])", explanation)
             or re.search(r"(?:不是|不选|应选|改选|而是|或者|或)\s*[A-H]", explanation)):
         return None
+    for assertion in re.finditer(r"(?:选(?:择)?|答案(?:是|为)?|最终(?:答案)?(?:是|为)?|其实|应该是|应为|[和与及或])\s*([A-H])", explanation):
+        if assertion[1] == match[1]:
+            continue
+        prefix = explanation[max(0, assertion.start() - 10):assertion.start()]
+        # Discussing an unchosen option is fine; another positive or uncertain
+        # selection declaration makes the observed answer ambiguous.
+        if re.search(r"(?:不能|不要|不应|不|别)\s*$", prefix) and not re.search(r"不能不\s*$", prefix):
+            continue
+        return None
+    if any(letter != match[1] for letter in re.findall(r"([A-H])(?:才是|才对|是正确答案|是最终答案)", explanation)):
+        return None
     return match[1]
 
 
@@ -117,15 +129,26 @@ def false_option_is_requested(item: dict) -> bool:
     value = validated_choice_evaluation(item)
     if not value or not value["selection_matches"] or value.get("selected_statement_truth") != "false":
         return False
-    requirement = value["requirement"]
+    requirement = re.sub(r"\s+", "", value["requirement"])
+    visible = re.sub(r"\s+", "", str(item.get("visible_question_text") or ""))
     # Only explicit negative asks qualify. Double negatives and an unrelated
     # quoted statement are not evidence that the child should select a falsehood.
     if re.search(r"[“‘\"']", requirement):
         return False
-    for match in re.finditer(r"不正确|不恰当|不属于|不符合|有误|错误", requirement):
-        prefix = requirement[max(0, match.start() - 12):match.start()]
-        if re.search(r"(?:没有|未发现|不存在|不是|并非|不能认为|不代表).{0,6}$", prefix):
-            return False
-        if re.match(r"(?:的)?(?:一项|选项|说法|句子|表述|是|为|[（(])", requirement[match.end():]):
-            return True
-    return False
+    contexts = []
+    start = visible.find(requirement)
+    while start >= 0:
+        prefix = re.split(r"[，。；;！？!?]", visible[max(0, start - 12):start])[-1]
+        contexts.append(prefix + requirement)
+        start = visible.find(requirement, start + 1)
+    qualified = []
+    for context in contexts:
+        negative = False
+        for match in re.finditer(r"不正确|不恰当|不属于|不符合|有误|错误", context):
+            prefix = context[max(0, match.start() - 12):match.start()]
+            if re.search(r"(?:没有|未发现|不存在|不是|并非|不能认为|不代表).{0,6}$", prefix):
+                return False
+            if re.match(r"(?:的)?(?:一项|选项|说法|句子|表述|是|为|[（(])", context[match.end():]):
+                negative = True
+        qualified.append(negative)
+    return bool(qualified and all(qualified))

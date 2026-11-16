@@ -27,6 +27,9 @@ def test_arithmetic_never_evaluates_unsupported_code(expression):
     ("12－3＝8", True), ("错误示例：12-3=8。", False),
     ("反例：\n12-3=8。订正：12-3=9。", False),
     ("D项：12-3=8。", False), ("正确计算：12-3=8。", True),
+    ("验算D项：12-3=8。", True), ("正确计算A项：12-3=8。", True),
+    ("D项的计算结果：12-3=8。", True),
+    ("错误示例：12-3=8。下面计算。24/6=5。", True),
     ("24÷6=4=5", True), ("3÷0=0", True),
     ("答案约为3.14≈22/7", False), ("x+2=4", False),
     ("面积为2m²=20000cm²", False), ("如果12−3=8，则不符合原条件", False),
@@ -75,16 +78,32 @@ def test_double_negative_ask_never_authorizes_selecting_a_false_statement(requir
     assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "unclear"
 
 
+@pytest.mark.parametrize("visible,requirement", [("下列没有错误的一项是", "错误的一项"),
+    ("下列不是不正确的一项是", "不正确的一项")])
+def test_truncated_requirement_cannot_remove_a_visible_negation(visible, requirement):
+    item = choice_item()
+    item["visible_question_text"] = visible
+    item["choice_evaluation"]["requirement"] = requirement
+    assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "unclear"
+
+
 @pytest.mark.parametrize("answer,reference", [("D。理由正确。", "D"), ("D", "D。理由正确。"), ("（D）", "答案选D。")])
 def test_choice_binding_accepts_a_clear_letter_followed_by_explanation(answer, reference):
     item = {**choice_item(), "answer": answer, "reference_answer": reference}
     assert grounded_check_status(item, [.1, .1, .1, .1]) == ("looks_correct", False)
 
 
-@pytest.mark.parametrize("answer", ["AD", "不是D，应选A", "D或A", "D，A", "D。不是D，应选A。"])
+@pytest.mark.parametrize("answer", ["AD", "不是D，应选A", "D或A", "D，A", "D。不是D，应选A。",
+    "D，同时选择A", "D，另外还选A", "D。最终答案是A", "D，也可能选A"])
 def test_ambiguous_or_retracted_letters_do_not_bind_to_a_single_selection(answer):
     item = {**choice_item(), "answer": answer}
     assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "unclear"
+
+
+@pytest.mark.parametrize("answer", ["D，A项错误", "D，不能选A"])
+def test_discussion_of_an_unchosen_option_is_not_a_second_selection(answer):
+    item = {**choice_item(), "answer": answer}
+    assert grounded_check_status(item, [.1, .1, .1, .1])[0] == "looks_correct"
 
 
 def test_selecting_an_incorrect_equation_may_quote_it_without_asserting_it_is_true():
