@@ -1405,6 +1405,9 @@ def locate_question(settings: Settings, image: bytes, target: str,
         "图形对象可给kind=region，box圈住实际可见的具体对象或局部，text为简短可见描述，"
         "confidence至少0.9；region不是文字OCR，不推断隐藏数量、补位或最终形状。"
         "不能猜隐藏点、中点或推测辅助线。"
+        "同时返回reading={conditions:[一到四条逐字引用的已知条件],ask:逐字引用的实际所求或作答要求}。"
+        "这里只做读题，不计算、不补充关系、不包含解法或答案；条件和所求必须是evidence中的连续原文，"
+        "无法完整读出时reading=null。现有anchors对应这些实际条件和所求原词。"
     )
     if infer:
         instruction += (
@@ -1469,10 +1472,18 @@ def locate_question(settings: Settings, image: bytes, target: str,
         found = (raw.get("found") is True and raw.get("ambiguous") is not True
                  and box is not None and confidence >= (.80 if infer or marks else .72)
                  and bool(label) and bool(evidence))
-        return {"found": found, "box": box if found else None,
+        result = {"found": found, "box": box if found else None,
                 "label": label if found else "", "evidence": evidence if found else "",
                 "confidence": confidence,
                 "anchors": normalized_text_anchors(raw.get("anchors"), box, evidence) if found else []}
+        if found and isinstance(raw.get("reading"), dict):
+            # Share the scan-time literal and pixel gates; optional reading must
+            # never turn target location into a solver or require a second call.
+            from .reading_review import normalize_reading
+            reading = normalize_reading({**raw["reading"], "anchors": result["anchors"]}, result, image)
+            if reading:
+                result["reading"] = reading
+        return result
     except httpx.ReadTimeout as exc:
         logger.warning("Question location timed out after %s seconds", settings.ai_timeout_seconds)
         raise HTTPException(504, "题目定位超时，请保持纸面清晰后重试。") from exc

@@ -34,6 +34,39 @@ def paper(words=None):
     return output.getvalue(), anchors
 
 
+def test_cold_locator_reuses_its_literal_reading_without_another_model_call(monkeypatch):
+    image, anchors = paper()
+    calls = []
+    settings = SimpleNamespace(ai_api_url="https://example.invalid/chat", ai_api_key="test", ai_model="test")
+    raw = {"found": True, "confidence": .97, "label": "第1题", "box": TARGET,
+           "evidence": "nonzero methods", "anchors": anchors,
+           "reading": {"conditions": ["nonzero"], "ask": "methods"}}
+    monkeypatch.setattr(ai, "post_model", lambda _s, payload: calls.append(payload) or {
+        "choices": [{"message": {"content": json.dumps(raw)}}]})
+    located = ai.locate_question(settings, image, "这道题")
+    assert len(calls) == 1 and located["found"]
+    assert located["reading"]["conditions"] == ["nonzero"]
+    assert located["reading"]["ask"] == "methods"
+    assert len(located["reading"]["anchors"]) == 2
+    assert "不计算" in calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("change", [
+    {"reading": {"conditions": ["invented"], "ask": "methods"}},
+    {"reading": {"conditions": ["nonzero"], "ask": "answer42"}},
+    {"confidence": .82},
+])
+def test_optional_cold_reading_cannot_invent_conditions_or_use_low_confidence(monkeypatch, change):
+    image, anchors = paper()
+    settings = SimpleNamespace(ai_api_url="https://example.invalid/chat", ai_api_key="test", ai_model="test")
+    raw = {"found": True, "confidence": .97, "label": "第1题", "box": TARGET,
+           "evidence": "nonzero methods", "anchors": anchors,
+           "reading": {"conditions": ["nonzero"], "ask": "methods"}, **change}
+    monkeypatch.setattr(ai, "post_model", lambda *_a: {"choices": [{"message": {"content": json.dumps(raw)}}]})
+    located = ai.locate_question(settings, image, "这道题")
+    assert located["found"] and "reading" not in located
+
+
 def lesson(raw, *, anchors=None, image=None, level=2, question="请完整讲解。",
            evidence=None, solution=None, tail=False):
     original_image, original_anchors = paper()

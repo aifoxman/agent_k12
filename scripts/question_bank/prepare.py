@@ -38,7 +38,9 @@ def prepare_document(record, output: Path, settings, round_id=1):
     identifier = record["sha256"][:20]
     spec_path = output / "private" / "specs" / f"{identifier}.json"
     cached_spec = read(spec_path) if spec_path.exists() else None
-    if cached_spec and cached_spec.get("validation_version") == 4:
+    if cached_spec and (cached_spec.get("validation_version") == 5 or
+                        cached_spec.get("validation_version") == 4 and cached_spec.get("accepted")
+                        and cached_spec.get("independent_reference_check") is True):
         return cached_spec
     content = read(output / "private" / "documents" / f"{record['sha256']}.json")
     pdf = output / "private" / "pdf" / f"{record['sha256']}.pdf"
@@ -46,6 +48,12 @@ def prepare_document(record, output: Path, settings, round_id=1):
         return {"case_id": identifier, "accepted": False, "validation_errors": ["pdf_missing"]}
     with pymupdf.open(pdf) as document:
         pages = list(document)[:min(4, len(document))]
+        before_answers = []
+        for candidate_page in pages:
+            if re.search(r"(?m)^\s*(?:参考答案|答案[与及]?解析|试题答案)\s*[:：]?\s*$", candidate_page.get_text()):
+                break
+            before_answers.append(candidate_page)
+        pages = before_answers or pages[:1]
         # English first pages frequently contain only listening; select visible written work.
         if record["subject"] == "english":
             pages.sort(key=lambda page: sum(bool(re.search(pattern, page.get_text(), re.I))
@@ -79,6 +87,15 @@ def prepare_document(record, output: Path, settings, round_id=1):
                 elif (rect & text_rect).get_area() > 0:
                     rect |= text_rect
                     rect = (rect + (-3, -3, 3, 3)) & page_rect
+            elif quote_rects:
+                # Vision boxes are coarse. A bounded PDF-glyph snap may recover a
+                # clipped first line, but never an unrelated distant question.
+                nearby = min(quote_rects, key=lambda r: abs(r.y0 - rect.y0))
+                allowance = pymupdf.Rect(rect.x0 - page_rect.width * .035, rect.y0 - page_rect.height * .035,
+                                         rect.x1 + page_rect.width * .035, rect.y1 + page_rect.height * .035)
+                expanded = rect | nearby
+                if allowance.contains(nearby) and expanded.get_area() <= rect.get_area() * 1.6:
+                    rect = (expanded + (-3, -3, 3, 3)) & page_rect
             if not quote_rects or not any(rect.contains(r) for r in quote_rects):
                 spec["accepted"] = False
                 spec["validation_errors"].append("question_quote_outside_crop")
@@ -116,7 +133,7 @@ def prepare_document(record, output: Path, settings, round_id=1):
                                 "box": [(match.x0 - rect.x0) / rect.width, (match.y0 - rect.y0) / rect.height,
                                         match.width / rect.width, match.height / rect.height]})
         spec.setdefault("independent_reference_check", False)
-        spec["validation_version"] = 4
+        spec["validation_version"] = 5
         dump(spec_path, spec)
         return spec
 
