@@ -23,6 +23,7 @@ from PIL import Image
 from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box,
                  parse_model_json, post_model, read_teaching_anchors, set_usage_family,
                  tight_teaching_anchor_image, stream_model)
+from .ai import verify_critical_literal_read
 from .config import Settings
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
@@ -182,6 +183,9 @@ def inventory_page(settings: Settings, image: bytes,
         if (not box or not isinstance(path, list) or
                 confidence < .65 or len(evidence) < 4):
             dropped["box" if not box else "fields"] += 1
+            return
+        if not verify_critical_literal_read(settings, image, box, evidence):
+            dropped["literal_disagreement"] += 1
             return
         if not path:
             # A virtual identity is for storage, never a claimed printed number.

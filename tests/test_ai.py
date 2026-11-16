@@ -682,6 +682,31 @@ def test_conflicting_judgment_is_withheld_without_another_model_call():
     assert grounded_check_status(item, [.2, .2, .1, .1]) == ("looks_correct", False)
 
 
+def test_critical_language_read_is_blind_and_disagreement_cannot_drive_a_lesson(monkeypatch):
+    from k12_server.ai import verify_critical_literal_read
+    from io import BytesIO
+    from PIL import Image
+    image = BytesIO()
+    Image.new("RGB", (800, 400), "white").save(image, "JPEG")
+    source = "与‘清’意思相关的一项是 A.清楚 B.水流"
+    reread = {"evidence": source, "confidence": .99, "ambiguous": False}
+    calls = []
+    def post(settings, payload):
+        calls.append(payload)
+        user = payload["messages"][1]["content"]
+        assert "清" not in user[0]["text"] and "清楚" not in payload["messages"][0]["content"]
+        return {"choices": [{"message": {"content": json.dumps(reread)}}]}
+    monkeypatch.setattr("k12_server.ai.post_model", post)
+    settings = SimpleNamespace(ai_model="model")
+    assert verify_critical_literal_read(settings, image.getvalue(), [.1, .1, .8, .5], source)
+    reread["evidence"] = "与‘请’意思相关的一项是 A.清楚 B.水流"
+    assert not verify_critical_literal_read(settings, image.getvalue(), [.1, .1, .8, .5], source)
+    reread["evidence"] = "与‘清’意思相关的一项是 A.清楚 B.冰流"
+    assert not verify_critical_literal_read(settings, image.getvalue(), [.1, .1, .8, .5], source)
+    assert verify_critical_literal_read(settings, image.getvalue(), [.1, .1, .8, .5], "12-3是多少")
+    assert len(calls) == 3
+
+
 @pytest.mark.parametrize("reason,expected", [
     ("没有计算错误，运算顺序正确。", ("looks_correct", False)),
     ("未发现运算错误。", ("looks_correct", False)),

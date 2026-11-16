@@ -1427,6 +1427,39 @@ def render_pen_marks(image: bytes, strokes: list[list[list[float]]]) -> bytes:
     return output.getvalue()
 
 
+def critical_literal_signature(evidence: str):
+    terms = set(re.findall(r'''[“‘"']([\u4e00-\u9fff]{1,2})[”’"']''', evidence))
+    if not terms or not any(word in evidence for word in ("字义", "意思", "读音", "形近", "同音", "部首", "偏旁", "组词")):
+        return None
+    parts = re.split(r"([A-H])[.．、:：]", evidence)
+    options = {parts[i]: "".join(re.findall(r"[\u4e00-\u9fff]", parts[i + 1]))
+               for i in range(1, len(parts) - 1, 2)}
+    return terms, options
+
+
+def verify_critical_literal_read(settings: Settings, image: bytes, box: list[float], evidence: str) -> bool:
+    """Blindly check short language targets before a misread can drive a lesson."""
+    expected = critical_literal_signature(evidence)
+    if expected is None:
+        return True
+    crop, _ = tight_teaching_anchor_image(image, box)
+    payload = {"model": settings.ai_model, "temperature": 0,
+               "response_format": {"type": "json_object"}, "messages": [
+        {"role": "system", "content":
+         "你只做独立逐字读题，不解题，不知道其他读题结果。核对引号内的题眼字和每个选项字，"
+         "逐笔看完整字形，尤其相似字的右部；不能按常见搭配或预想含义猜字。"
+         "只抄照片中实际可见的完整原题和选项，保留引号与A.等选项标记，不补写解释。"
+         "不能确认关键字时ambiguous=true。返回JSON："
+         "{\"evidence\":\"原题逐字转录\",\"confidence\":0到1,\"ambiguous\":布尔值}"},
+        {"role": "user", "content": [{"type": "text", "text": "独立读取这张原图局部，不推断答案。"},
+         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(crop).decode(), "detail": "high"}}]},
+    ]}
+    raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])
+    return (raw.get("ambiguous") is False and bounded_confidence(raw.get("confidence")) >= .9
+            and isinstance(raw.get("evidence"), str)
+            and critical_literal_signature(raw["evidence"]) == expected)
+
+
 def locate_question(settings: Settings, image: bytes, target: str,
                     context: str = "", infer: bool = False,
                     marks: list[list[list[float]]] | None = None) -> dict:
@@ -1440,6 +1473,7 @@ def locate_question(settings: Settings, image: bytes, target: str,
         "必须按真实的层级和印刷题号匹配，不要把相邻题或同大题的其他小题当作目标。"
         "若目标不在画面、编号或题干模糊、被遮挡，或有多个同名候选而无法区分，found=false。"
         "不得仅凭用户口述或其他作业样本猜题目内容。"
+        "语言题的题眼字和选项字须逐笔核对完整字形，尤其易混字的右部；不能按熟悉词义反猜字形。"
         "返回严格 JSON：{\"found\":布尔值,\"ambiguous\":布尔值,"
         "\"label\":纸面上的题号或标题,\"evidence\":目标区域实际可见的完整题干、关键条件和选项；"
         "区分印刷内容与孩子已写内容，不补全看不清的字词,"
@@ -1530,6 +1564,9 @@ def locate_question(settings: Settings, image: bytes, target: str,
         found = (raw.get("found") is True and raw.get("ambiguous") is not True
                  and box is not None and confidence >= (.80 if infer or marks else .72)
                  and bool(evidence))
+        if found and not verify_critical_literal_read(settings, image, box, evidence):
+            logger.warning("Critical literal readings disagree; withholding the located teaching target")
+            found = False
         # Cropped worksheets legitimately omit the printed number. A missing
         # display label cannot invalidate an otherwise independently located
         # question; never manufacture a printed number or coerce null evidence.
