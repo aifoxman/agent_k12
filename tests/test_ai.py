@@ -703,6 +703,7 @@ def test_conflict_gate_respects_bounded_negation_without_proving_correctness(rea
     ("选D", "D项有误，A项符合题意。", "unclear"),
     ("D", "学生作答错误。A项错误。", "unclear"),
     ("D", "A项说明学生答案错误。", "unclear"),
+    ("D", "A项说明D错误。", "unclear"),
     ("AD", "A项有误。", "unclear"),
     ("D", "有误，应订正。", "unclear"),
 ])

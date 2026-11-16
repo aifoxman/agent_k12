@@ -470,6 +470,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
             options = re.findall(r"(?<![A-Za-z])([A-H])(?=项|句|[、.．:：])|(?:选项|句子)([A-H])", clause)
             labels = {a or b for a, b in options}
             if (labels and chosen[1] not in labels
+                    and not re.search(rf"(?<![A-Za-z]){chosen[1]}(?![A-Za-z])", clause)
                     and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
                 continue
             retained.append(clause)
