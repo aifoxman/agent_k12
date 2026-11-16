@@ -115,3 +115,8 @@ def test_incomplete_crop_is_removed_only_with_unique_printed_and_spatial_proof()
     assert len(merged({**fragment, "_question_box": [.1, .6, .8, .1]})["checks"]) == 2
     assert len(merged({**fragment, "answer": "different visible answer"})["checks"]) == 2
     assert len(merged(fragment, {**complete, "_question_complete": False})["checks"]) == 2
+    # A legible one-line crop fragment can be shorter than the minimum
+    # handwritten-answer box once mapped back to the full page.
+    thin = {**fragment, "_question_box": [.1, 0, .8, .025]}
+    small_complete = {**complete, "_question_box": [.1, .742, .8, .099]}
+    assert len(merged(thin, small_complete)["checks"]) == 1

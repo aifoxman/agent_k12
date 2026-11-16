@@ -2065,7 +2065,7 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
                     reason = "模型结论与文字解释冲突，请对照原题复核。" + reason
                 normalized["checks"].append({
                     "_question_complete": item.get("question_complete"),
-                    "_question_box": normalized_box(item.get("question_box")),
+                    "_question_box": normalized_mark_box(item.get("question_box")),
                     "_visible_question_text": str(item.get("visible_question_text") or "")[:1000],
                     "question": str(item.get("question", "未定位题目"))[:100],
                     "status": status,

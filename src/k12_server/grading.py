@@ -181,7 +181,12 @@ def merge_correction_regions(items: Iterable[tuple[Region, dict]]) -> dict:
         for original in result.get("checks", []):
             check = dict(original)
             check["box"] = _full_box(check.get("box"), region)
-            check["_question_box"] = _full_box(check.get("_question_box"), region)
+            printed_box = check.get("_question_box")
+            check["_question_box"] = normalized_mark_box([
+                region[0] + printed_box[0] * region[2],
+                region[1] + printed_box[1] * region[3],
+                printed_box[2] * region[2], printed_box[3] * region[3],
+            ]) if printed_box else None
             check["_source_region"] = region
             check["steps"] = [
                 {**step, "box": _full_box(step.get("box"), region)}
