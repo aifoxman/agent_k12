@@ -103,7 +103,11 @@ import {
   teachingDraftFromTarget,
   teachingDraftInScope,
 } from './teaching-notes';
-import { mergeTeachingTarget, visibleTeachingDraft } from './teaching-session';
+import {
+  continuationTeachingTarget,
+  mergeTeachingTarget,
+  visibleTeachingDraft,
+} from './teaching-session';
 import { createHintContext, finishConfirmationText } from './hint-context';
 import {
   READING_QUESTION,
@@ -5869,6 +5873,12 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
     });
     if (plan.replay) return replayTeaching();
     const frozen = plan.binding;
+    const waitingContext = continuationTeachingTarget(
+      frozen,
+      hintTarget,
+      lastTeachingSceneRef.current,
+    );
+    let waitingForContinuation = Boolean(waitingContext);
     teachingPlaybackRef.current?.cancel();
     const request = hintContextRef.current.begin();
     const markController = request.controller;
@@ -5903,8 +5913,8 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       setTeachingMode('lesson');
       setHintPreparationLabel('正在核对题目并准备讲解…');
       setQuestionInputOpen(false);
-      setReviewBeat(null);
-      setSilentReview(false);
+      setReviewBeat(waitingContext ? waitingContext.beats.length - 1 : null);
+      setSilentReview(Boolean(waitingContext));
       clearHelpOffer(false);
       const uncertainSpokenNumber = Boolean(
         reference &&
@@ -5921,7 +5931,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       }
       setHintBusy(true);
       setHintBusyTarget(reference || '');
-      setHintTarget(null);
+      if (!waitingContext) setHintTarget(null);
       if (!frozen) {
         lastTeachingSceneRef.current = null;
         saveQuestionGuidance(null);
@@ -5979,14 +5989,14 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             ...update,
             imageUrl: imageUrl(),
             sceneKey: `live:${playbackRun}`,
-            beats: [...visibleSteps],
+            beats: waitingForContinuation ? waitingContext.beats : [...visibleSteps],
           }),
         );
       updateTarget({
         box: frozen?.box || localSelection?.question?.box,
         label: frozen?.label || localSelection?.question?.label || reference,
-        textAnchors: localAnchors?.anchors || [],
-        selectionStrokes: inkStrokes,
+        textAnchors: localAnchors?.anchors || waitingContext?.textAnchors || [],
+        selectionStrokes: inkStrokes.length ? inkStrokes : waitingContext?.selectionStrokes || [],
       });
       playback = newTeachingPlayback(
         isCurrent,
@@ -6014,6 +6024,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       const enqueueBeat = (data) => {
         if (data.reading_key && readingKeys.has(data.reading_key)) return;
         if (data.reading_key) readingKeys.add(data.reading_key);
+        waitingForContinuation = false;
         setHintPreparationLabel('');
         streamedBeats.push(data);
         trace.mark(data.phase === 'reading' ? 'reading_ready' : 'explanation_ready');
@@ -6071,6 +6082,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
             return;
           }
           if (event !== 'sentence' || !data.text) return;
+          waitingForContinuation = false;
           setHintPreparationLabel('');
           streamedSentences++;
           playback.enqueue(
@@ -6169,6 +6181,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
       setQuestion('');
       setQuestionInputOpen(false);
       if (!streamedSentences) {
+        waitingForContinuation = false;
         playback.enqueue(
           teachingSteps(
             replayBeats.length ? replayBeats : [{ speech: result.response, page: [], scratch: [] }],

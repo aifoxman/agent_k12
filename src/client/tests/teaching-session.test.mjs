@@ -4,7 +4,28 @@ import {
   mergeTeachingTarget,
   teachingFollowupPrompt,
   visibleTeachingDraft,
+  continuationTeachingTarget,
 } from '../src/teaching-session.js';
+
+test('continuation retains released work only for the same bound photograph and question', () => {
+  const image = {},
+    box = [0.1, 0.2, 0.5, 0.3];
+  const target = {
+    imageUrl: 'blob:current',
+    box,
+    beats: [{ speech: '已讲出的内容', scratch: [] }],
+  };
+  assert.equal(continuationTeachingTarget({ image, box }, target, { image }), target);
+  assert.equal(continuationTeachingTarget({ image: {}, box }, target, { image }), null);
+  assert.equal(
+    continuationTeachingTarget({ image, box: [0.2, 0.5, 0.4, 0.2] }, target, { image }),
+    null,
+  );
+  assert.equal(
+    continuationTeachingTarget({ image, box }, { ...target, beats: [] }, { image }),
+    null,
+  );
+});
 
 test('late localization and a done event without a box preserve already spoken page operations', () => {
   const first = { speech: '先圈出条件', page: [{ kind: 'circle', box: [0.1, 0.2, 0.1, 0.1] }] };

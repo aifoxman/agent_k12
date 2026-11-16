@@ -18,6 +18,19 @@ export function mergeTeachingTarget(current, update) {
   };
 }
 
+export function continuationTeachingTarget(binding, target, scene) {
+  if (
+    !binding?.image ||
+    binding.image !== scene?.image ||
+    !target?.beats?.length ||
+    !Array.isArray(binding.box) ||
+    binding.box.length !== 4
+  )
+    return null;
+  if (JSON.stringify(binding.box) !== JSON.stringify(target.box)) return null;
+  return target;
+}
+
 // Saving a lesson never opens it. Only an active lesson or an explicit review
 // may put its thinking board on screen.
 export function visibleTeachingDraft({
