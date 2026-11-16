@@ -17,6 +17,7 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from threading import Lock
 
+import httpx
 from PIL import Image
 
 from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box,
@@ -206,8 +207,21 @@ def inventory_page(settings: Settings, image: bytes,
     if on_question:
         payload.pop("response_format", None)
         buffer, received = "", 0
+        stream_failed = False
         decoder = json.JSONDecoder()
-        for delta in stream_model(settings, payload):
+        def deltas():
+            nonlocal stream_failed
+            # A cold scan must not wait the full solver timeout for its first
+            # token. The configured fast vision route can recover the ordinary
+            # read below; all confidence and pixel checks remain mandatory.
+            scan_settings = (replace(settings, ai_timeout_seconds=min(30, settings.ai_timeout_seconds))
+                             if isinstance(settings, Settings) else settings)
+            try:
+                yield from stream_model(scan_settings, payload)
+            except httpx.HTTPError as exc:
+                stream_failed = True
+                logger.warning("Page index stream unavailable: %s", type(exc).__name__)
+        for delta in deltas():
             buffer += delta
             received += len(delta)
             if received > 200_000:
@@ -226,14 +240,17 @@ def inventory_page(settings: Settings, image: bytes,
                 accept(value)
                 if len(found) >= 60:
                     return found
-        if found:
+        if found and not stream_failed:
             return found
         # One bounded ordinary request supports providers that buffer or return
         # a non-JSONL shape. Do not abandon this page silently after an empty scan.
         logger.warning("Page streaming index empty: received_chars=%d rejected=%s", received, dict(dropped))
         payload["messages"][0]["content"] = ordinary_instruction
         payload["response_format"] = {"type": "json_object"}
-        raw = parse_model_json(post_model(settings, payload, timeout=min(30, settings.ai_timeout_seconds))
+        fallback = (replace(settings, ai_model=settings.ai_fast_vision_model)
+                    if isinstance(settings, Settings) and settings.ai_fast_vision_model else settings)
+        payload["model"] = fallback.ai_model
+        raw = parse_model_json(post_model(fallback, payload, timeout=min(30, settings.ai_timeout_seconds))
                                ["choices"][0]["message"]["content"])
     else:
         raw = parse_model_json(post_model(settings, payload)["choices"][0]["message"]["content"])

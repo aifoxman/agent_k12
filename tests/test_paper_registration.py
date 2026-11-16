@@ -114,6 +114,25 @@ def test_empty_stream_gets_one_bounded_ordinary_scan_instead_of_silently_disabli
     assert len(result) == 1 and calls == [{"timeout": 30}]
 
 
+def test_scan_transport_timeout_uses_the_configured_fast_vision_recovery(prepared, monkeypatch):
+    import httpx
+    from dataclasses import replace
+    _, module, _, _, _, image, _ = prepared
+    settings = replace(module.settings, ai_model="gpt-6-sol", ai_fast_vision_model="gpt-6-luna")
+    def unavailable(scan_settings, _payload):
+        assert scan_settings.ai_timeout_seconds <= 30
+        raise httpx.ReadTimeout("synthetic unavailable stream")
+        yield  # This test double follows the streaming generator contract.
+    monkeypatch.setattr(page_prep, "stream_model", unavailable)
+    def ordinary(read_settings, payload, **kwargs):
+        assert read_settings.ai_model == payload["model"] == "gpt-6-luna"
+        return {"choices": [{"message": {"content": json.dumps({"questions": [{
+            "path": ["1"], "label": "one", "evidence": "real visible question",
+            "box": [.1, .1, .7, .3], "progress": "blank", "confidence": .96}]})}}]}
+    monkeypatch.setattr(page_prep, "post_model", ordinary)
+    assert len(page_prep.inventory_page(settings, image, None, lambda *_a: None)) == 1
+
+
 def test_index_exposes_no_answers_and_binding_checks_hash_session_pixels_and_overlap(prepared):
     _, module, _, session, family, image, service = prepared
     service.frames["current-page"] = image
