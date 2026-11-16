@@ -1062,6 +1062,11 @@ class PagePreparation:
             future = self.question_futures.get(key)
             if key in self.foreground_jobs or key in self.running_questions:
                 return
+            if future is None and item["page_id"] not in self.inventory_jobs:
+                # No queued Future and no live indexing worker: this is an
+                # orphaned pending row, not work to promote. Let the request
+                # own its single on-demand attempt instead of racing it.
+                return
         if future and not future.cancel():
             return
         config = preferences(self.settings.database_path, family_id)

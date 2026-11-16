@@ -156,4 +156,29 @@ def test_reference_photo_and_stream_require_the_active_child_device(prepared):
     response = client.get(base + "/image", headers=child)
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
     assert response.content == image
-    assert client.get(base + "/image", headers=parent(client)).status_code == 403
+    assert client.get(base + "/image", headers=parent(client, "another@example.com")).status_code == 403
+
+
+def test_selected_planned_question_can_run_before_the_page_worker_finishes(prepared, monkeypatch):
+    from threading import Event
+    from test_prepared_lesson_wait import SOLUTION
+    _, module, _, session, family, image, service = prepared
+    service.inventory_jobs.add("current-page")
+    completed, calls = Event(), []
+    def solve(*_args, **_kwargs):
+        calls.append(1)
+        completed.set()
+        return SOLUTION
+    monkeypatch.setattr(page_prep, "solve_question", solve)
+    item = service.teaching_question(session, family["id"], image, "current-question")
+    service.prioritize(session, family["id"], item)
+    assert completed.wait(2)
+    service.foreground.shutdown(wait=True)
+    item = service.teaching_question(session, family["id"], image, "current-question")
+    assert item["verification_status"] == "verified"
+    # The old background plan is allowed to reach this ordinal later, but it
+    # must consume the completed result rather than start another model call.
+    service._solve_one("current-page", session, family["id"], image,
+                       module.preferences(module.settings.database_path, family["id"]),
+                       module.settings, item, 0, "", "")
+    assert calls == [1]
