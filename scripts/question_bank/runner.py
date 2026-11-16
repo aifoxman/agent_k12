@@ -177,6 +177,29 @@ def manifest(output: Path, split: str):
     return value
 
 
+def bootstrap_bounded(base: str, api_run: Path, case: dict, image: Path, scope_name: str):
+    """Retry a temporary setup failure once; persist negative vision evidence."""
+    setup_errors = api_run / "private" / "setup-errors" / f"{scope_name}.json"
+    attempts = read(setup_errors) if setup_errors.exists() else []
+    if len(attempts) >= 2 or any(a.get("terminal") for a in attempts):
+        raise RuntimeError("Visual setup previously failed; evidence retained, no further automatic retries")
+    for attempt in range(len(attempts), 2):
+        try:
+            state = bootstrap(base, "http://127.0.0.1:5186/app/", api_run,
+                              image,
+                              state_name=f"{scope_name}.json", setup_result_name=f"setup-{scope_name}.json",
+                              grade=GRADE_LABELS[case["grade"]], evaluation_trace=f"setup:{case['id']}")
+            return state
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            temporary = isinstance(exc, httpx.RequestError) or status in {502, 503, 504}
+            attempts.append({"attempt": attempt + 1, "error": type(exc).__name__, "status": status,
+                             "terminal": not temporary, "at": time.time()})
+            dump(setup_errors, attempts)
+            if not temporary or attempt == 1:
+                raise
+
+
 def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, tag: str,
              modes: list[str], variant="clean", audio=False, cache="cold"):
     base = safe_base(base)
@@ -202,10 +225,10 @@ def run_case(output: Path, base: str, api_run: Path, case: dict, round_id: int, 
             if active.get("id") != prior.get("session_id") or active.get("status") != "active":
                 state_path.replace(state_path.with_name(state_path.stem + ".expired-" + uuid.uuid4().hex[:8] + ".json"))
     # Real camera/setup preflight and pairing; no copied family or forged ticket.
-    state = bootstrap(base, "http://127.0.0.1:5186/app/", api_run,
-                      safe_image(output, case["images"]["hint"]),
-                      state_name=f"{scope_name}.json", setup_result_name=f"setup-{scope_name}.json",
-                      grade=GRADE_LABELS[case["grade"]], evaluation_trace=f"setup:{case['id']}") if not state_path.exists() else read(state_path)
+    if state_path.exists():
+        state = read(state_path)
+    else:
+        state = bootstrap_bounded(base, api_run, case, safe_image(output, case["images"]["hint"]), scope_name)
     if not state_path.exists():
         original = api_run / f"{scope_name}.json"
         state_path.parent.mkdir(exist_ok=True)
@@ -287,10 +310,22 @@ def run(output: Path, base: str, api_run: Path, round_id: int, tag: str, *, spli
         raise ValueError("No cases selected")
     modes = modes or ["hint1", "hint2", "correct", "wrong", "blank"]
     results = []
+    base_output = output if split == "development" else output / "private" / "holdout"
+    plan = {"cases": [c["id"] for c in cases], "modes": modes, "variant": variant, "cache": cache,
+            "expected_tasks": len(cases) * len(modes)}
+    dump(base_output / "plans" / f"{valid_tag(tag)}.json", plan)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(run_case, output, base, api_run, case, round_id, tag, modes, variant, audio, cache) for case in cases]
+        futures = {pool.submit(run_case, output, base, api_run, case, round_id, tag, modes, variant, audio, cache): case for case in cases}
         for future in as_completed(futures):
-            results.extend(future.result())
+            try:
+                results.extend(future.result())
+            except Exception as exc:
+                from scripts.question_bank.budget import BudgetExceeded
+                if isinstance(exc, BudgetExceeded):
+                    raise
+                dump(base_output / "private" / "case-setup-failures" / tag / f"{futures[future]['id']}.json",
+                     {"case_id": futures[future]["id"], "error": type(exc).__name__, "task_requests_not_started": True})
+                print({"case": futures[future]["id"], "setup_failed": type(exc).__name__}, flush=True)
     return results
 
 

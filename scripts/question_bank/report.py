@@ -15,6 +15,8 @@ def report(output: Path, tag: str, split="development"):
     base = output if split == "development" else output / "private" / "holdout"
     all_records = [read(p) for p in (base / "results" / tag).glob("*.json")]
     records = [record for record in all_records if record.get("completed")]
+    plan_path = base / "plans" / f"{tag}.json"
+    plan = read(plan_path) if plan_path.exists() else {}
     reviews = {p.name: read(p) for p in (base / "reviews" / tag).glob("*.json")}
     groups, timing, failures, verified_timing = defaultdict(Counter), defaultdict(list), defaultdict(list), defaultdict(list)
     for record in records:
@@ -40,6 +42,9 @@ def report(output: Path, tag: str, split="development"):
                     verified_timing[f"{record['mode']}:{record['variant']}:{record.get('cache', 'cold')}:{key}"].append(value)
     result = {"tag": tag, "split": split, "simulated_camera": True, "real_handwriting": False,
               "running_tasks": sum(not r.get("completed") for r in all_records),
+              "expected_tasks": plan.get("expected_tasks"),
+              "completed_tasks": len(records),
+              "missing_or_not_completed_tasks": max(0, plan.get("expected_tasks", len(records)) - len(records)),
               "groups": {key: dict(counts) for key, counts in groups.items()},
               "timings": {key: {"n": len(values), "median": percentile(values, .5), "p95": percentile(values, .95)} for key, values in timing.items()},
               "failure_timings": {key: {"n": len(values), "median": percentile(values, .5), "p95": percentile(values, .95)} for key, values in failures.items()},

@@ -272,6 +272,52 @@ def test_isolated_secret_survives_restart_without_sharing_family_credentials(tmp
     assert len(first) >= 48
 
 
+def test_setup_gateway_retry_is_bounded_across_resumes(monkeypatch, tmp_path):
+    import httpx
+    from scripts.question_bank import runner
+    calls = []
+    def unavailable(*args, **kwargs):
+        calls.append(1)
+        response = httpx.Response(502, request=httpx.Request("POST", "http://localhost/setup"))
+        response.raise_for_status()
+    monkeypatch.setattr(runner, "bootstrap", unavailable)
+    args = ("http://127.0.0.1:8027", tmp_path, {"id": "case", "grade": 1}, tmp_path / "paper.jpg", "scope")
+    with pytest.raises(httpx.HTTPStatusError):
+        runner.bootstrap_bounded(*args)
+    with pytest.raises(RuntimeError, match="previously failed"):
+        runner.bootstrap_bounded(*args)
+    assert len(calls) == 2
+    assert len(json.loads((tmp_path / "private/setup-errors/scope.json").read_text())) == 2
+
+
+def test_setup_negative_vision_is_not_retried_or_replaced_with_ready(monkeypatch, tmp_path):
+    from scripts.question_bank import runner
+    calls = []
+    def reject(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("Real visual preflight did not accept the synthetic paper")
+    monkeypatch.setattr(runner, "bootstrap", reject)
+    args = ("http://127.0.0.1:8027", tmp_path, {"id": "case", "grade": 1}, tmp_path / "paper.jpg", "scope")
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            runner.bootstrap_bounded(*args)
+    assert len(calls) == 1
+
+
+def test_setup_retry_requires_a_real_success(monkeypatch, tmp_path):
+    import httpx
+    from scripts.question_bank import runner
+    results = iter([httpx.ConnectError("temporary"), {"synthetic": True, "session_id": "real-session"}])
+    def bootstrap(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    monkeypatch.setattr(runner, "bootstrap", bootstrap)
+    result = runner.bootstrap_bounded("http://127.0.0.1:8027", tmp_path, {"id": "case", "grade": 1}, tmp_path / "paper.jpg", "scope")
+    assert result["session_id"] == "real-session"
+
+
 @pytest.mark.parametrize("label,expected", [("2.", "第2题"), ("3", "第3题"), ("二、（4）", "第二大题第4小题"),
                                            ("左页第2大题第3小题", "左页第2大题第3小题"),
                                            ("小明有12块糖，吃了3块，还剩多少块", None)])

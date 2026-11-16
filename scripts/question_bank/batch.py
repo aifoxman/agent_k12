@@ -106,10 +106,20 @@ def score(response: dict, oracle: dict):
 
 
 def run(output: Path, base: str, api_run: Path, round_id: int, tag: str):
-    from scripts.question_bank.runner import run_case
+    from scripts.question_bank.runner import run_case, valid_tag
     cases = read(output / "batch-manifest.json")["cases"]
+    valid_tag(tag)
+    dump(output / "plans" / f"{tag}.json", {"cases": [c["id"] for c in cases], "modes": ["mixed"], "expected_tasks": len(cases)})
     results = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for future in as_completed([pool.submit(run_case, output, base, api_run, case, round_id, tag, ["mixed"]) for case in cases]):
-            results.extend(future.result())
+        futures = {pool.submit(run_case, output, base, api_run, case, round_id, tag, ["mixed"]): case for case in cases}
+        for future in as_completed(futures):
+            try:
+                results.extend(future.result())
+            except Exception as exc:
+                from scripts.question_bank.budget import BudgetExceeded
+                if isinstance(exc, BudgetExceeded):
+                    raise
+                dump(output / "private" / "case-setup-failures" / tag / f"{futures[future]['id']}.json",
+                     {"case_id": futures[future]["id"], "error": type(exc).__name__, "task_requests_not_started": True})
     return results
