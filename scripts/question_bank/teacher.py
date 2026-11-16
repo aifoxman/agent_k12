@@ -46,11 +46,26 @@ hard_checks逐项先核查，明确答案或判分错误不论标成major还是c
 findings.quote只能逐字引用observed某字段值里的连续原文，不拼接、不加省略号，也不要把多个JSON字段拼成引文。
 缺失字段的quote留空并用path和basis说明缺失；不把实际显示或同步当作API已证明。
 没有可靠证据不得凑分通过；严重错误不得以流畅或速度抵消。"""
-RUBRIC_VERSION = hashlib.sha256(RUBRIC.encode()).hexdigest()[:16]
+RUBRIC_VERSION = hashlib.sha256((RUBRIC + "reference-view-v2-rendered-coordinate-space").encode()).hexdigest()[:16]
+
+
+def reference_view(oracle: dict) -> dict:
+    """Do not bias the judge with scenario labels or wrong coordinate spaces."""
+    if oracle.get("rows"):
+        return {"kind": "composite_original_crops", "questions": [
+            {"ordinal_in_current_page": row["ordinal"], "current_page_region": row["box"],
+             "reference": reference_view(row["reference"])} for row in oracle["rows"]]}
+    keys = {"question_text", "reference_quote", "answer", "final_answer", "open_ended",
+            "proof_expression", "proof_result", "proof_status", "independent_reference_check"}
+    value = {key: oracle[key] for key in keys if key in oracle}
+    solution = oracle.get("independent_solution") or {}
+    value["independent_solution"] = {key: solution[key] for key in
+        ("question_text", "final_answer", "solution", "complete", "confidence") if key in solution}
+    return value
 
 
 def evaluation_contract(mode: str) -> dict:
-    if mode in {"correct", "wrong", "blank"}:
+    if mode in {"correct", "wrong", "blank", "mixed"}:
         return {"task": "correction", "allow_final_answers": True, "requires_full_reference_solution": True,
                 "answer_withholding_rule_applies": False}
     if mode in {"hint1", "hint2"}:

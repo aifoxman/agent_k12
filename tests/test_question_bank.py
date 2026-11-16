@@ -15,8 +15,8 @@ from scripts.question_bank.budget import Budget, BudgetExceeded
 from scripts.question_bank.corpus import docx_content, inferred_subject, inventory
 from scripts.question_bank.prepare import group_cases
 from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
-from scripts.question_bank.simulation import percentile, safe_image
-from scripts.question_bank.teacher import arithmetic, assess_review, distill, evaluation_contract, validate_oracle
+from scripts.question_bank.simulation import percentile, rendered_text_regions, safe_image, student_paper
+from scripts.question_bank.teacher import arithmetic, assess_review, distill, evaluation_contract, reference_view, validate_oracle
 
 
 def test_source_answers_are_separated_even_when_filename_has_no_answer(tmp_path):
@@ -168,6 +168,41 @@ def test_grading_blank_is_authorized_to_show_answers_and_not_a_first_tier():
               "hard_checks": {"answer_permission": "fail"}}
     corrected = assess_review(review, {"reference_answer": "6"}, "blank")
     assert corrected["verdict"] == "needs_review" and corrected["mode_conflict"]
+
+
+def test_teacher_reference_does_not_include_scenario_truth_or_pdf_coordinates():
+    view = reference_view({"box": [.1, .7, .8, .1], "crop_box": [.1, .7, .8, .1],
+                           "wrong_answer": "35", "wrong_reason": "subtraction error", "answer": "45",
+                           "independent_solution": {"final_answer": "45", "_call": {"model": "private"}}})
+    assert view["answer"] == "45" and not {"box", "crop_box", "wrong_answer", "wrong_reason"} & view.keys()
+    assert "_call" not in view["independent_solution"]
+
+
+def test_batch_coverage_requires_every_question_and_never_guesses_spatial_ownership():
+    from scripts.question_bank.batch import score
+    rows = [{"ordinal": i + 1, "mode": mode, "box": [0, i / 3, 1, 1 / 3]} for i, mode in enumerate(("correct", "wrong", "blank"))]
+    checks = [{"box": [.2, i / 3 + .1, .1, .05], "status": "looks_correct" if i == 0 else "check_again",
+               "answer_state": "blank" if i == 2 else "written", "answer": "" if i == 2 else "value"} for i in range(3)]
+    assert score({"checks": checks}, {"rows": rows})["status"] == "pass"
+    assert score({"checks": checks[:2]}, {"rows": rows})["status"] == "fail"
+    checks[0]["box"] = [0, 0, 1, 1]
+    result = score({"checks": checks}, {"rows": rows})
+    assert result["status"] == "fail" and result["unmatched_checks"] == 1
+
+
+def test_teacher_word_regions_match_the_rendered_pixels_not_original_pdf_coordinates(tmp_path):
+    from PIL import Image, ImageDraw
+    source = Image.new("RGB", (200, 100), "white")
+    ImageDraw.Draw(source).rectangle((40, 20, 60, 40), fill="black")
+    crop_path = tmp_path / "crop.png"
+    source.save(crop_path)
+    sheet = student_paper(source, "", None)
+    sheet_path = tmp_path / "paper.png"
+    sheet.save(sheet_path)
+    regions = rendered_text_regions({"crop": "crop.png", "keyword_boxes": [{"text": "ink", "box": [.2, .2, .1, .2]}]}, sheet_path, tmp_path)
+    x, y, w, h = regions[0]["box"]
+    assert sheet.getpixel((round((x + w / 2) * sheet.width), round((y + h / 2) * sheet.height))) == (0, 0, 0)
+    assert rendered_text_regions({"crop": "crop.png"}, sheet_path, tmp_path, "rotation") == []
 
 
 def test_waiting_status_and_target_box_are_not_effective_teaching():

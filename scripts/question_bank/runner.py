@@ -17,8 +17,8 @@ from scripts.acceptance.bootstrap import bootstrap, verify_acceptance_api
 from scripts.question_bank.budget import Budget
 from scripts.question_bank.corpus import dump, read
 from scripts.question_bank.gates import apply as apply_gates
-from scripts.question_bank.simulation import safe_image
-from scripts.question_bank.teacher import RUBRIC, RUBRIC_VERSION, assess_review, call_teacher, distill, evaluation_contract
+from scripts.question_bank.simulation import rendered_text_regions, safe_image
+from scripts.question_bank.teacher import RUBRIC, RUBRIC_VERSION, assess_review, call_teacher, distill, evaluation_contract, reference_view
 
 SUBJECT_LABELS = {"math": "数学", "chinese": "语文", "english": "英语", "science": "科学"}
 GRADE_LABELS = dict(enumerate(["", *[n + "年级" for n in "一二三四五六"]]))
@@ -320,8 +320,9 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                           "unassessed": ["Content not scored because observable delivery gates failed."]}
         else:
             oracle = read(base / "private" / "oracles" / f"{record['case_id']}.json")
-            teacher_reference = {key: value for key, value in oracle.items()
-                                 if key not in {"wrong_answer", "wrong_reason", "crop", "source_path"}}
+            teacher_reference = reference_view(oracle)
+            teacher_reference["expected_text_regions_in_current_input"] = rendered_text_regions(
+                oracle, safe_image(output, record["image"]), output, record["variant"])
             assessment = None
             errors = []
             for _attempt in range(2):
@@ -346,6 +347,16 @@ def review(output: Path, settings, round_id: int, tag: str, *, split="developmen
                 assessment = {"verdict": "needs_review", "reference_reliable": False, "scores": {},
                               "findings": [], "mean_score": None, "review_service_errors": errors}
         assessment = apply_gates(record, assessment)
+        if record["mode"] == "mixed":
+            from scripts.question_bank.batch import score
+            coverage = score(record["response"], read(base / "private" / "oracles" / f"{record['case_id']}.json"))
+            assessment["batch_coverage"] = coverage
+            if coverage["status"] == "fail":
+                assessment["verdict"] = "fail"
+                assessment.setdefault("findings", []).append({"severity": "major", "path": "checks",
+                    "reason": "Independent spatial coverage/state checks failed", "source": "batch_gate"})
+            elif coverage["status"] == "needs_review" and assessment["verdict"] == "pass":
+                assessment["verdict"] = "needs_review"
         assessment.update(case_id=record["case_id"], mode=record["mode"], tag=tag, image=record["image"], rubric_version=RUBRIC_VERSION)
         dump(destination, assessment)
         if split == "development":

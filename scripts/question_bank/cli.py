@@ -33,21 +33,22 @@ def main():
     commands.add_parser("export")
     commands.add_parser("backfill")
     commands.add_parser("classify")
+    commands.add_parser("prepare-batch")
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--limit", type=int, default=1000)
     seal = commands.add_parser("seal")
     seal.add_argument("--font", default="C:/Windows/Fonts/msyh.ttc")
-    for command in ("run", "review"):
+    for command in ("run", "review", "batch-run"):
         sub = commands.add_parser(command)
         sub.add_argument("--round", type=int, choices=(1, 2, 3), required=True)
         sub.add_argument("--tag", required=True)
         sub.add_argument("--split", choices=("development", "holdout"), default="development")
         sub.add_argument("--limit", type=int, default=300)
-        if command == "run":
+        if command != "review":
             sub.add_argument("--base-url", required=True)
             sub.add_argument("--api-run", type=run_directory, required=True)
             sub.add_argument("--case", action="append")
-            sub.add_argument("--modes", nargs="+", choices=("hint1", "hint2", "correct", "wrong", "blank"))
+            sub.add_argument("--modes", nargs="+", choices=("mixed",) if command == "batch-run" else ("hint1", "hint2", "correct", "wrong", "blank"))
             sub.add_argument("--variant", choices=("clean", "rotation", "perspective", "shadow", "blur", "jpeg", "movement"), default="clean")
             sub.add_argument("--audio", action="store_true")
             sub.add_argument("--cache", choices=("cold", "warm"), default="cold")
@@ -72,6 +73,9 @@ def main():
         print(json.dumps(backfill(output)))
     elif args.command == "classify":
         print(json.dumps(classify_cached(output)))
+    elif args.command == "prepare-batch":
+        from scripts.question_bank.batch import prepare
+        print(json.dumps({"composite_pages": len(prepare(output))}))
     elif args.command == "snapshot":
         destination = output / "private" / "baseline-src"
         if destination.exists():
@@ -103,6 +107,11 @@ def main():
         from scripts.question_bank.runner import run
         run(output, args.base_url, args.api_run, args.round, args.tag, split=args.split,
             modes=args.modes, selected=args.case, limit=args.limit, variant=args.variant, audio=args.audio, cache=args.cache)
+    elif args.command == "batch-run":
+        if args.split != "development" or args.variant != "clean" or args.cache != "cold" or args.audio:
+            raise ValueError("Composite grading uses clean development images without tutoring/audio")
+        from scripts.question_bank.batch import run
+        run(output, args.base_url, args.api_run, args.round, args.tag)
     elif args.command == "review":
         from scripts.question_bank.runner import review
         from scripts.question_bank.teacher import load_settings

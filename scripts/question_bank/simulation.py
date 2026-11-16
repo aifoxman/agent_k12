@@ -36,13 +36,13 @@ def photographed(image: Image.Image, variant: str, seed: str) -> Image.Image:
     raise ValueError("Unknown camera variant")
 
 
-def student_paper(crop: Image.Image, answer: str, font_path: str, *, variant="clean", seed="") -> Image.Image:
+def student_paper(crop: Image.Image, answer: str, font_path: str | None, *, variant="clean", seed="") -> Image.Image:
     crop = crop.convert("RGB")
     width = max(1000, crop.width)
     height = round(crop.height * width / crop.width)
     crop = crop.resize((width, height))
     font_size = 38
-    font = ImageFont.truetype(font_path, font_size)
+    font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default(size=font_size)
     # The separate simulated answer area never overwrites printed source conditions.
     lines = [answer[i:i + max(1, width // (font_size + 2) - 4)]
              for i in range(0, len(answer), max(1, width // (font_size + 2) - 4))]
@@ -57,6 +57,23 @@ def student_paper(crop: Image.Image, answer: str, font_path: str, *, variant="cl
     for i, line in enumerate(lines):
         draw.text((260, top + i * 54), line, font=font, fill="#224b98")
     return photographed(sheet, variant, seed)
+
+
+def rendered_text_regions(oracle: dict, image_path: Path, root: Path, variant="clean") -> list[dict]:
+    """Translate original crop coordinates into the current simulated JPEG."""
+    if variant != "clean" or not oracle.get("crop"):
+        return [region for row in oracle.get("rows", []) for region in row.get("keyword_regions", [])] if variant == "clean" else []
+    with Image.open(root / oracle["crop"]) as crop, Image.open(image_path) as sheet:
+        width = max(1000, crop.width)
+        height = round(crop.height * width / crop.width)
+        if sheet.width != width + 100:
+            return []
+        regions = []
+        for item in oracle.get("keyword_boxes", []):
+            x, y, w, h = item["box"]
+            regions.append({"text": item["text"], "box": [(50 + x * width) / sheet.width,
+                            (90 + y * height) / sheet.height, w * width / sheet.width, h * height / sheet.height]})
+        return regions
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
