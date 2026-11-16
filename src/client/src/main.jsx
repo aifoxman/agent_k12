@@ -7890,7 +7890,7 @@ function ChildHome({ dashboard, refresh, onError, onNotice, spokenText }) {
                 </TeachingPaperFrame>
               )}
               {stage === 'active' &&
-                teachingMode === 'idle' &&
+                teachingMode !== 'lesson' &&
                 !teachingVisible &&
                 !cameraPreviewFullscreen && (
                   <>
