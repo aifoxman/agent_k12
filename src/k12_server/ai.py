@@ -20,6 +20,9 @@ from fastapi import HTTPException
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from .config import Settings
+from .answer_validation import (
+    arithmetic_conflict, false_option_is_requested, validated_choice_evaluation,
+)
 from .db import transaction
 from .teaching_alignment import (
     tight_teaching_anchor_image as tight_teaching_anchor_image,
@@ -447,6 +450,12 @@ def grounded_check_status(item: dict, box: list[float] | None,
             or not str(item.get("reason") or "").strip() or (require_box and box is None
                                           and status != "needs_discussion" and not supported_blank)):
         return "unclear", False
+    comparison = validated_choice_evaluation(item)
+    if (comparison and status in {"looks_correct", "check_again"}
+            and comparison["selection_matches"] != (status == "looks_correct")):
+        return "unclear", True
+    if arithmetic_conflict(item.get("solution_steps")):
+        return "unclear", True
     explanation = " ".join((str(item.get("reason", "")),
                             str(item.get("explanation", "")),
                             str(item.get("comparison", ""))))
@@ -466,6 +475,7 @@ def grounded_check_status(item: dict, box: list[float] | None,
         # correct selection. Retain unclear subjects and mixed/child verdicts.
         clauses = re.split(r"[，,。；;！？!?\n]", explanation)
         retained = []
+        requested_false_option = false_option_is_requested(item)
         for clause in clauses:
             options = re.findall(r"(?<![A-Za-z])([A-H])(?=项|句|[、.．:：])|(?:选项|句子)([A-H])", clause)
             labels = {a or b for a, b in options}
@@ -473,6 +483,12 @@ def grounded_check_status(item: dict, box: list[float] | None,
                     and not re.search(rf"(?<![A-Za-z]){chosen[1]}(?![A-Za-z])", clause)
                     and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
                 continue
+            if (requested_false_option and labels == {chosen[1]}
+                    and not any(word in clause for word in ("孩子", "学生", "所选", "你选", "答案", "作答"))):
+                # For a literal negative-choice ask, a false statement can be
+                # exactly the right selection. Keep every actual student or
+                # requirement verdict, including mixed clauses, intact.
+                clause = re.sub(r"说法(?:是)?错误|说法(?:是)?不正确|(?:是)?错误的(?:说法|表述)|表述有误", "", clause)
             retained.append(clause)
         explanation = "。".join(retained)
     if status == "looks_correct" and any(word in explanation for word in (
@@ -1232,7 +1248,8 @@ def normalized_solution_fields(item: dict, status: str) -> dict:
     empty = {"reference_answer": "", "solution_idea": "", "solution_steps": [],
              "comparison": "", "diagram": None}
     if (status == "unclear" or item.get("question_complete") is not True
-            or bounded_confidence(item.get("solution_confidence", 0)) < .85):
+            or bounded_confidence(item.get("solution_confidence", 0)) < .85
+            or arithmetic_conflict(item.get("solution_steps"))):
         return empty
     reference = str(item.get("reference_answer") or "").strip()[:500]
     if not reference:
@@ -1919,6 +1936,13 @@ def analyze(settings: Settings, image: bytes, prompt: str, age_band: str, grade:
             "选择题逐项独立核查，存在唯一无明确语病的选项时应核对学生选择；风格建议单列。"
             "needs_discussion须指出同一题目标准下的具体结构、逻辑、语义问题或合理多解。"
             "reason与comparison明确区分学生所选项和未选项，不能把未选项的错误写成学生答案错误。"
+            "把题目要求、选项真假和选择对错分开：选错误说法时，错误的说法正是正确选项，"
+            "reason和comparison只评价学生选择是否满足题目要求，不把选项内容的真假当作选择对错。"
+            "单选题额外返回choice_evaluation={requirement:逐字引用的作答要求,selected:孩子所选字母,"
+            "expected:独立求得的参考字母,selection_matches:选择是否与参考相同的布尔值,"
+            "selected_statement_truth:true/false/not_applicable字符串}；不是单选题时为null。"
+            "独立求解后先回代原条件检查数量、范围和单位；若认为无解，逐一检查允许的候选值，"
+            "不能仅凭一次尝试失败就断言无解或题目印错。solution_steps里的等式须算对。"
             "不要补全被遮挡内容，不要猜孩子的思路，不要把批改结论当成任务完成确认。"
             "先数出画面中完整可见且需要书面作答的题目总数（含空白题），返回 visible_answer_count 整数。"
             "同时返回 subject 为可辨认学科或空字符串、printed_page 为可见印刷页码或空字符串；不要猜。"

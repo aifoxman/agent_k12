@@ -25,6 +25,7 @@ from .ai import (bounded_confidence, local_teaching_text_anchors, normalized_box
                  tight_teaching_anchor_image, stream_model)
 from .ai import verify_critical_literal_read
 from .config import Settings
+from .answer_validation import arithmetic_conflict
 from .db import RETENTION_SECONDS, connect, transaction
 from .grading import focus_question_image
 from .reading_review import normalize_reading, reading_anchors_complete
@@ -299,11 +300,14 @@ def solve_question(settings: Settings, image: bytes, question: dict,
         "只有题干或必要条件确实看不清，或结合可见课程语境后仍有多种同等合理、影响答案的"
         "解释且缺乏选择证据时，才标 ambiguous=true，并在steps写清具体缺失信息；"
         "不能为顺利辅导而强行消除真正的歧义。"
+        "求解后必须用原条件反向检查答案、单位、取值范围及所求对象；"
+        "判断无解前检查所有允许候选或给出排除依据，不把一次试算失败当成无解或印刷错误。"
+        "check只写一条独立验算：数值题用准确等式，其他题用原文或学科依据核验。"
         "不要把孩子写的答案当成正确答案。hint_seed 是给老师生成首步提示的入手线索，"
         "不得包含最终答案、完整推导或选项字母。返回严格 JSON："
         "{\"answer\":\"答案或合理答案范围\",\"steps\":\"简要推导及依据\","
         "\"hint_seed\":\"不含答案的首步引导线索\","
-        "\"confidence\":0到1,\"ambiguous\":布尔值}。"
+        "\"check\":\"一条独立验算或核验依据\",\"confidence\":0到1,\"ambiguous\":布尔值}。"
         "若题目要求最少、最多或最优，解法须给出可行方案及覆盖题目允许其他方案的界限理由；"
         "不能只数选定布局的缺口，就声称已经证明全局最少。说明为什么换一种允许的拼法或布局"
         "也不能更优，证明方式按题目证据选择，不套固定枚举。若只能核实可行方案或条件下的界限，"
@@ -325,12 +329,16 @@ def solve_question(settings: Settings, image: bytes, question: dict,
     seed = str(raw.get("hint_seed") or "").strip()[:300]
     if answer and (answer in seed or any(number in seed for number in re.findall(r"\d{2,}", answer))):
         seed = ""
+    steps = str(raw.get("steps") or "").strip()[:1600]
+    check = str(raw.get("check") or "").strip()[:400]
+    conflict = arithmetic_conflict(steps, check)
     return {
         "answer": answer,
-        "steps": str(raw.get("steps") or "").strip()[:1600],
-        "hint_seed": seed,
-        "confidence": bounded_confidence(raw.get("confidence")),
-        "ambiguous": raw.get("ambiguous") is True,
+        "steps": steps,
+        "check": check,
+        "hint_seed": "" if conflict else seed,
+        "confidence": 0 if conflict else bounded_confidence(raw.get("confidence")),
+        "ambiguous": raw.get("ambiguous") is True or conflict,
     }
 
 

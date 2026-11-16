@@ -72,6 +72,9 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     compact = lambda value: re.sub(r"\s+", "", value)
     grounded = lambda text: any(compact(a["text"]) in compact(text) for a in anchors)
     conditions = list(reading["conditions"])
+    choice_material = bool(re.search(r"(?:^|[\s，。；;])A[.．、]|[A-H]项|不正确|错误的(?:一项|说法)", question["evidence"]))
+    condition_lead = "原题写的是" if choice_material else "题目告诉我们"
+    ask_lead = "要我们判断的是" if choice_material else "要我们求的是"
     # Begin with a real cue the child can see immediately. This changes only
     # the order of the same literal givens, never adds a condition or an answer.
     if not grounded(reading["ask"]):
@@ -79,12 +82,12 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     label = spoken_question_label(question["label"])
     lead = f"先看{label}，" if label else ""
     first, *remaining = conditions
-    speech = (lead + f"题目告诉我们“{first}”。"
-              + "".join(f"还有一个条件是“{text}”。" for text in remaining)
-              + f"要我们求的是“{reading['ask']}”。")
+    speech = (lead + f"{condition_lead}“{first}”。"
+              + "".join(f"{condition_lead}“{text}”。" for text in remaining)
+              + f"{ask_lead}“{reading['ask']}”。")
     if grounded(reading["ask"]):
-        speech = (lead + f"这道题要我们求的是“{reading['ask']}”。"
-                  + "".join(f"题目告诉我们“{text}”。" for text in conditions))
+        speech = (lead + f"这道题{ask_lead}“{reading['ask']}”。"
+                  + "".join(f"{condition_lead}“{text}”。" for text in conditions))
     beat = normalized_teaching_beat({
         "speech": speech, "step_id": 1, "step_title": "读题审题", "step_end": True,
         "teaching_move": "give_clue", "reply_mode": "none", "needs_parent": False,
@@ -98,7 +101,7 @@ def reading_review(question: dict, image: bytes) -> dict | None:
     # they are never represented as a computed method or a completed solution.
     beat["scratch"] = [
         {"kind": "text", "role": "prose", "x": 5, "y": 5 + index * 15,
-         "text": "已知：" + text, "preview": True, "draft_kind": "reading"}
+         "text": ("材料：" if choice_material else "已知：") + text, "preview": True, "draft_kind": "reading"}
         for index, text in enumerate(conditions)
     ] + [{"kind": "text", "role": "prose", "x": 5, "y": 5 + len(conditions) * 15,
           "text": "所求：" + reading["ask"], "preview": True, "draft_kind": "reading"}]

@@ -23,6 +23,16 @@ def question():
             "confidence": .96, "read_confidence": .96, "progress": "blank"}
 
 
+def test_choice_reading_never_labels_an_unchecked_option_as_a_known_fact():
+    item = question()
+    item["evidence"] = "下列说法不正确的一项是 A.所有鸟都会飞 B.鸟有羽毛"
+    item["reading"] = {"conditions": ["所有鸟都会飞"], "ask": "不正确的一项", "anchors": []}
+    review = reading_review(item, paper())
+    assert review["scratch"][0]["text"] == "材料：所有鸟都会飞"
+    assert "原题写的是" in review["speech"]
+    assert "告诉我们" not in review["speech"]
+
+
 def test_reading_is_available_without_any_solution_and_does_not_introduce_an_answer():
     item = question()
     item["reading"] = {"conditions": ["前面有5人", "后面有6人"],

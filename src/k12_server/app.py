@@ -16,7 +16,7 @@ import sqlite3
 import time
 import uuid
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -2618,6 +2618,28 @@ def _answer_feedback(family: dict, image_bytes: bytes, located: dict,
         return None
 
 
+def _hint_solution_events(future, annotations, *, poll_seconds=.15, heartbeat_seconds=5):
+    """Publish already verified word marks while a separate solve is pending."""
+    last_heartbeat = time.monotonic()
+    while True:
+        try:
+            result = future.result(timeout=poll_seconds)
+        except FutureTimeoutError:
+            if future.done():
+                raise  # A worker timeout is an error, not an unfinished future.
+        else:
+            update = annotations()
+            if update:
+                yield _hint_event("reading_marks", update)
+            return result
+        update = annotations()
+        if update:
+            yield _hint_event("reading_marks", update)
+        if time.monotonic() - last_heartbeat >= heartbeat_seconds:
+            yield ": checking solution\n\n"
+            last_heartbeat = time.monotonic()
+
+
 def _refresh_teaching_solution(session_id: str, family: dict, image: bytes,
                                target: dict, question: str,
                                student_thought: str = "", *, wait_for_pending: bool = True,
@@ -2985,8 +3007,20 @@ def stream_hint(session_id: str = Form(...), question: str = Form(...),
                     r"积木|小正方体|立方体", target_item.get("evidence", "")) else "正在核对解题过程…")
                 yield _hint_event("status", {"stage": "checking_solution", "label": label})
             try:
-                target_item = _resolve_teaching_solution(
-                    session_id, family, image_bytes, target_item, question, student_thought or "", level=level)
+                pending_target = target_item
+
+                def resolve_in_parallel():
+                    with teaching_call_context(family["id"], trace_id):
+                        return _resolve_teaching_solution(
+                            session_id, family, image_bytes, pending_target, question, student_thought or "", level=level)
+
+                solution_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hint-wait")
+                try:
+                    future = solution_pool.submit(resolve_in_parallel)
+                    target_item = yield from _hint_solution_events(
+                        future, lambda: ready_annotations(pending_target))
+                finally:
+                    solution_pool.shutdown(wait=False, cancel_futures=True)
             except HTTPException as exc:
                 yield _hint_event("error", {"detail": str(exc.detail)})
                 return

@@ -139,6 +139,29 @@ SOLUTION = {"answer": "17", "steps": "逐项对应题目条件，完成计算后
             "confidence": .97, "ambiguous": False}
 
 
+def test_pending_solver_does_not_hold_back_finished_word_annotations():
+    from concurrent.futures import Future
+    from k12_server.app import _hint_solution_events
+    future = Future()
+    updates = iter([{"page": [{"kind": "underline", "text": "关键条件"}]}, None])
+    stream = _hint_solution_events(future, lambda: next(updates), poll_seconds=.001)
+    first = next(stream)
+    assert "event: reading_marks" in first and not future.done()
+    future.set_result({"solution": SOLUTION})
+    with pytest.raises(StopIteration) as complete:
+        next(stream)
+    assert complete.value.value == {"solution": SOLUTION}
+
+
+def test_solver_timeout_is_not_swallowed_as_another_wait_cycle():
+    from concurrent.futures import Future
+    from k12_server.app import _hint_solution_events
+    future = Future()
+    future.set_exception(TimeoutError("solver deadline"))
+    with pytest.raises(TimeoutError, match="solver deadline"):
+        next(_hint_solution_events(future, lambda: None, poll_seconds=.001))
+
+
 @pytest.fixture
 def prepared(monkeypatch, tmp_path):
     client, module = make_client(monkeypatch, tmp_path)

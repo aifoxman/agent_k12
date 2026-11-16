@@ -499,6 +499,9 @@ def grounded_teaching_solution(solution: object, read_confidence: float) -> bool
     """Allow a checked example for open-ended drawing tasks, but not unreadable ones."""
     if not isinstance(solution, dict) or read_confidence < .75:
         return False
+    from .answer_validation import arithmetic_conflict
+    if arithmetic_conflict(solution.get("steps"), solution.get("check")):
+        return False
     answer = str(solution.get("answer") or "").strip()
     steps = str(solution.get("steps") or "").strip()
     if not answer or not steps or bounded_confidence(solution.get("confidence")) < .85:
@@ -1097,6 +1100,10 @@ def stream_teaching_beats(settings: Settings, page_image: bytes, focus_image: by
         "优先用一到两个连贯讲解阶段讲清数量关系、具体算法和一条检查；"
         "不要用多个阶段同义反复解释每个数，或在没有需要时同时罗列画圆、倒数、数轴等多种算法。"
         "只选适合当前年级与卡点的一种方法讲透；复杂题仍保留全部必要因果与检验，不能为短而跳步。"
+        "第一层聚焦一个最有用的关系与可执行方法，不逐项展开无关选项，不预演第二层的完整计算；"
+        "第一层通常不比同题完整解答更长。第二层承接已读题意，讲全推导和检查，不重复铺垫。"
+        "选择题的选项是待判断的材料，不能把未核实或错误的选项写成已知事实；"
+        "读出作答要求中的否定词并同步强调，区分选项内容真假与选择是否符合要求。"
         "逻辑步按教学目的分阶段，不按句子或分类分支编号；同一读图、搬移、比较论证或检查阶段的"
         "连续语音片复用step_id，仅阶段最后一片step_end=true。阶段数量随题意决定，"
         "不要把证明表中的每一行都升级成新逻辑步。"

@@ -14,9 +14,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.question_bank.budget import Budget, BudgetExceeded
 from scripts.question_bank.corpus import docx_content, inferred_subject, inventory
 from scripts.question_bank.prepare import group_cases
+from scripts.question_bank.prepare import partition_groups
 from scripts.question_bank.runner import events, forms, meaningful, prepared_form, safe_base, valid_tag
 from scripts.question_bank.simulation import percentile, rendered_text_regions, safe_image, student_paper
 from scripts.question_bank.teacher import arithmetic, assess_review, distill, evaluation_contract, reference_view, validate_oracle
+
+
+def test_holdout_stratification_reserves_math_in_every_grade_and_keeps_development():
+    groups = []
+    for subject, per_grade in (("math", 5), ("chinese", 2), ("english", 2), ("science", 1)):
+        for grade in range(1, 7):
+            for index in range(per_grade):
+                groups.append([{"case_id": f"{subject}-{grade}-{index}", "subject": subject, "grade": grade}])
+    development, holdout, coverage = partition_groups(groups, set())
+    assert len(holdout) == 18
+    assert coverage["math_grades"] == [1, 2, 3, 4, 5, 6]
+    assert coverage["subjects"]["math"] >= 9
+    assert coverage["missing_math_grades"] == []
+    assert all(any(s["subject"] == "math" and s["grade"] == g for s in development) for g in range(1, 7))
+    assert partition_groups(list(reversed(groups)), set()) == (development, holdout, coverage)
+
+
+def test_holdout_keeps_source_groups_whole_and_reports_infeasible_math_coverage():
+    groups = [
+        [{"case_id": "seen", "subject": "math", "grade": 1},
+         {"case_id": "same-source", "subject": "math", "grade": 1}],
+        [{"case_id": "only-source", "subject": "math", "grade": 2}],
+        [{"case_id": "math-fresh", "subject": "math", "grade": 1}],
+    ]
+    development, holdout, coverage = partition_groups(groups, {"seen"})
+    assert [s["case_id"] for s in holdout] == ["math-fresh"]
+    assert {s["case_id"] for s in development} == {"seen", "same-source", "only-source"}
+    assert coverage["missing_math_grades"] == [2]
+    assert coverage["unfilled"] == 1
 
 
 def test_source_answers_are_separated_even_when_filename_has_no_answer(tmp_path):

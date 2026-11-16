@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -182,6 +183,53 @@ def group_cases(specs):
     return groups
 
 
+def partition_groups(groups: list[list[dict]], seen: set[str]):
+    """Reserve math grades first, then balance subjects without splitting families."""
+    all_cases = [case for group in groups for case in group]
+    counts = Counter((s["subject"], s["grade"]) for s in all_cases)
+    subjects = Counter(s["subject"] for s in all_cases)
+    math_grades = {grade for subject, grade in counts if subject == "math"}
+    desired = min(18, max(1, round(len(all_cases) * .3), len(math_grades)), max(0, len(all_cases) - 1))
+    candidates = sorted(groups, key=lambda g: tuple(sorted(s["case_id"] for s in g)))
+    holdout, chosen, selected_counts = [], set(), Counter()
+
+    def eligible(group):
+        if any(s["case_id"] in seen for s in group) or len(holdout) + len(group) > desired:
+            return False
+        additions = Counter((s["subject"], s["grade"]) for s in group)
+        # Keep development evidence in every stratum; one source cannot serve
+        # as both a tuning case and an independent held-out question.
+        return all(counts[key] - selected_counts[key] - n >= 1 for key, n in additions.items())
+
+    while len(holdout) < desired:
+        options = [(i, group) for i, group in enumerate(candidates) if i not in chosen and eligible(group)]
+        if not options:
+            break
+        current_subjects = Counter(s["subject"] for s in holdout)
+        covered_math = {s["grade"] for s in holdout if s["subject"] == "math"}
+
+        def score(option):
+            _, group = option
+            fresh_math = len({s["grade"] for s in group if s["subject"] == "math"} - covered_math)
+            subject_deficit = sum(max(0, desired * subjects[s["subject"]] / len(all_cases)
+                                      - current_subjects[s["subject"]]) for s in group) / len(group)
+            stratum_deficit = sum(desired * counts[(s["subject"], s["grade"])] / len(all_cases)
+                                  - selected_counts[(s["subject"], s["grade"])] for s in group) / len(group)
+            return fresh_math, subject_deficit, stratum_deficit, -len(group)
+
+        index, group = max(options, key=score)
+        chosen.add(index)
+        holdout.extend(group)
+        selected_counts.update((s["subject"], s["grade"]) for s in group)
+    development = [s for i, group in enumerate(candidates) if i not in chosen for s in group]
+    coverage = {"target": desired, "actual": len(holdout),
+                "subjects": dict(Counter(s["subject"] for s in holdout)),
+                "math_grades": sorted({s["grade"] for s in holdout if s["subject"] == "math"}),
+                "missing_math_grades": sorted(math_grades - {s["grade"] for s in holdout if s["subject"] == "math"}),
+                "unfilled": desired - len(holdout)}
+    return development, holdout, coverage
+
+
 def make_manifest(output: Path, font: str):
     if (output / "manifest.json").exists():
         raise ValueError("Manifest is immutable; choose a new run rather than changing its split")
@@ -206,24 +254,8 @@ def make_manifest(output: Path, font: str):
     substitutes = additional[:max(0, 60 - len(accepted))]
     accepted.extend(substitutes)
     groups = group_cases(accepted)
-    # Round-robin strata before deterministic group selection preserves grade/subject breadth.
-    strata = {}
-    for group in groups:
-        key = (group[0]["subject"], group[0]["grade"])
-        strata.setdefault(key, []).append(group)
-    ordered = []
-    while any(strata.values()):
-        for key in sorted(strata):
-            if strata[key]:
-                ordered.append(strata[key].pop(0))
-    total = sum(len(g) for g in ordered)
-    desired = min(18, max(1, round(total * .3)))
-    holdout, development = [], []
-    for group in ordered:
-        if not any(s["case_id"] in seen for s in group) and len(holdout) < desired and len(group) <= desired - len(holdout):
-            holdout.extend(group)
-        else:
-            development.extend(group)
+    total = sum(len(g) for g in groups)
+    development, holdout, split_coverage = partition_groups(groups, seen)
     manifests = {}
     for split, selected in (("development", development), ("holdout", holdout)):
         base = output if split == "development" else output / "private" / "holdout"
@@ -268,5 +300,6 @@ def make_manifest(output: Path, font: str):
     dump(output / "coverage.json", {"requested": 60, "accepted": total,
                                     "unavailable": 60 - total, "splits": manifests,
                                     "quota_gaps": quota_gaps,
+                                    "holdout_coverage": split_coverage,
                                     "substitutions": [{k: s[k] for k in ("case_id", "subject", "grade")} for s in substitutes]})
     return manifests
